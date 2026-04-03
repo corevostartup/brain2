@@ -18,20 +18,37 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  touch-action: manipulation;
 }
 
 html,
 body {
   height: 100%;
+  width: 100%;
   background: var(--background);
   color: var(--foreground);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow: hidden;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+  position: fixed;
+  overflow: hidden !important;
+  overscroll-behavior: none;
+  scrollbar-width: none !important;
+}
+
+html {
+  overflow-y: hidden !important;
+  overflow-x: hidden !important;
+  -ms-overflow-style: none !important;
+}
+
+body {
+  overflow-y: hidden !important;
+  overflow-x: hidden !important;
+  -ms-overflow-style: none !important;
 }
 
 textarea:focus,
@@ -45,18 +62,21 @@ button:focus {
 }
 
 ::-webkit-scrollbar {
-  display: none;
+  width: 0px !important;
+  height: 0px !important;
+  display: none !important;
 }
 
 ::-webkit-scrollbar-track {
-  display: none;
+  display: none !important;
 }
 
 ::-webkit-scrollbar-thumb {
-  display: none;
+  display: none !important;
 }
 
-/* Firefox scrollbar */
-* {
-  scrollbar-width: none;
-}
+/* Remove scrollbars - Firefox */
+scrollbar-width: none;
+
+/* Remove scrollbars - IE/Edge */
+-ms-overflow-style: none;
