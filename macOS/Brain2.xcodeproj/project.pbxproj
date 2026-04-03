@@ -1,0 +1,554 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		DF20967F2F7FF85B00C510DC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DF2096652F7FF85700C510DC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DF20966C2F7FF85700C510DC;
+			remoteInfo = Brain2;
+		};
+		DF2096892F7FF85C00C510DC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DF2096652F7FF85700C510DC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DF20966C2F7FF85700C510DC;
+			remoteInfo = Brain2;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		DF20966D2F7FF85700C510DC /* Brain2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Brain2.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF20967E2F7FF85B00C510DC /* Brain2Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = Brain2Tests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF2096882F7FF85C00C510DC /* Brain2UITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = Brain2UITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		DF20966F2F7FF85700C510DC /* Brain2 */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Brain2;
+			sourceTree = "<group>";
+		};
+		DF2096812F7FF85B00C510DC /* Brain2Tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Brain2Tests;
+			sourceTree = "<group>";
+		};
+		DF20968B2F7FF85C00C510DC /* Brain2UITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Brain2UITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		DF20966A2F7FF85700C510DC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF20967B2F7FF85B00C510DC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF2096852F7FF85B00C510DC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		DF2096642F7FF85700C510DC = {
+			isa = PBXGroup;
+			children = (
+				DF20966F2F7FF85700C510DC /* Brain2 */,
+				DF2096812F7FF85B00C510DC /* Brain2Tests */,
+				DF20968B2F7FF85C00C510DC /* Brain2UITests */,
+				DF20966E2F7FF85700C510DC /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		DF20966E2F7FF85700C510DC /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				DF20966D2F7FF85700C510DC /* Brain2.app */,
+				DF20967E2F7FF85B00C510DC /* Brain2Tests.xctest */,
+				DF2096882F7FF85C00C510DC /* Brain2UITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		DF20966C2F7FF85700C510DC /* Brain2 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF2096922F7FF85C00C510DC /* Build configuration list for PBXNativeTarget "Brain2" */;
+			buildPhases = (
+				DF2096692F7FF85700C510DC /* Sources */,
+				DF20966A2F7FF85700C510DC /* Frameworks */,
+				DF20966B2F7FF85700C510DC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				DF20966F2F7FF85700C510DC /* Brain2 */,
+			);
+			name = Brain2;
+			packageProductDependencies = (
+			);
+			productName = Brain2;
+			productReference = DF20966D2F7FF85700C510DC /* Brain2.app */;
+			productType = "com.apple.product-type.application";
+		};
+		DF20967D2F7FF85B00C510DC /* Brain2Tests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF2096952F7FF85C00C510DC /* Build configuration list for PBXNativeTarget "Brain2Tests" */;
+			buildPhases = (
+				DF20967A2F7FF85B00C510DC /* Sources */,
+				DF20967B2F7FF85B00C510DC /* Frameworks */,
+				DF20967C2F7FF85B00C510DC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DF2096802F7FF85B00C510DC /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DF2096812F7FF85B00C510DC /* Brain2Tests */,
+			);
+			name = Brain2Tests;
+			packageProductDependencies = (
+			);
+			productName = Brain2Tests;
+			productReference = DF20967E2F7FF85B00C510DC /* Brain2Tests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		DF2096872F7FF85B00C510DC /* Brain2UITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF2096982F7FF85C00C510DC /* Build configuration list for PBXNativeTarget "Brain2UITests" */;
+			buildPhases = (
+				DF2096842F7FF85B00C510DC /* Sources */,
+				DF2096852F7FF85B00C510DC /* Frameworks */,
+				DF2096862F7FF85B00C510DC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DF20968A2F7FF85C00C510DC /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DF20968B2F7FF85C00C510DC /* Brain2UITests */,
+			);
+			name = Brain2UITests;
+			packageProductDependencies = (
+			);
+			productName = Brain2UITests;
+			productReference = DF2096882F7FF85C00C510DC /* Brain2UITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		DF2096652F7FF85700C510DC /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					DF20966C2F7FF85700C510DC = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					DF20967D2F7FF85B00C510DC = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = DF20966C2F7FF85700C510DC;
+					};
+					DF2096872F7FF85B00C510DC = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = DF20966C2F7FF85700C510DC;
+					};
+				};
+			};
+			buildConfigurationList = DF2096682F7FF85700C510DC /* Build configuration list for PBXProject "Brain2" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = DF2096642F7FF85700C510DC;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = DF20966E2F7FF85700C510DC /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				DF20966C2F7FF85700C510DC /* Brain2 */,
+				DF20967D2F7FF85B00C510DC /* Brain2Tests */,
+				DF2096872F7FF85B00C510DC /* Brain2UITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		DF20966B2F7FF85700C510DC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF20967C2F7FF85B00C510DC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF2096862F7FF85B00C510DC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		DF2096692F7FF85700C510DC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF20967A2F7FF85B00C510DC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF2096842F7FF85B00C510DC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DF2096802F7FF85B00C510DC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DF20966C2F7FF85700C510DC /* Brain2 */;
+			targetProxy = DF20967F2F7FF85B00C510DC /* PBXContainerItemProxy */;
+		};
+		DF20968A2F7FF85C00C510DC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DF20966C2F7FF85700C510DC /* Brain2 */;
+			targetProxy = DF2096892F7FF85C00C510DC /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		DF2096902F7FF85C00C510DC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.8;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		DF2096912F7FF85C00C510DC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.8;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		DF2096932F7FF85C00C510DC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Brain2/Brain2.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"Brain2/Preview Content\"";
+				DEVELOPMENT_TEAM = 4Y6MWV9B36;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.corevo.Brain2;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		DF2096942F7FF85C00C510DC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Brain2/Brain2.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"Brain2/Preview Content\"";
+				DEVELOPMENT_TEAM = 4Y6MWV9B36;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.corevo.Brain2;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		DF2096962F7FF85C00C510DC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4Y6MWV9B36;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.8;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.corevo.Brain2Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Brain2.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Brain2";
+			};
+			name = Debug;
+		};
+		DF2096972F7FF85C00C510DC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4Y6MWV9B36;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.8;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.corevo.Brain2Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Brain2.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Brain2";
+			};
+			name = Release;
+		};
+		DF2096992F7FF85C00C510DC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4Y6MWV9B36;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.corevo.Brain2UITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = Brain2;
+			};
+			name = Debug;
+		};
+		DF20969A2F7FF85C00C510DC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4Y6MWV9B36;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.corevo.Brain2UITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = Brain2;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		DF2096682F7FF85700C510DC /* Build configuration list for PBXProject "Brain2" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF2096902F7FF85C00C510DC /* Debug */,
+				DF2096912F7FF85C00C510DC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DF2096922F7FF85C00C510DC /* Build configuration list for PBXNativeTarget "Brain2" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF2096932F7FF85C00C510DC /* Debug */,
+				DF2096942F7FF85C00C510DC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DF2096952F7FF85C00C510DC /* Build configuration list for PBXNativeTarget "Brain2Tests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF2096962F7FF85C00C510DC /* Debug */,
+				DF2096972F7FF85C00C510DC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DF2096982F7FF85C00C510DC /* Build configuration list for PBXNativeTarget "Brain2UITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF2096992F7FF85C00C510DC /* Debug */,
+				DF20969A2F7FF85C00C510DC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = DF2096652F7FF85700C510DC /* Project object */;
+}
