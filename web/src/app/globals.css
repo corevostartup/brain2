@@ -39,12 +39,17 @@ body {
   position: fixed;
   left: 0;
   top: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none;
 }
 
 html {
   overflow-y: hidden !important;
   overflow-x: hidden !important;
   -ms-overflow-style: none !important;
+  display: flex;
+  flex-direction: column;
 }
 
 body {
@@ -53,6 +58,7 @@ body {
   -ms-overflow-style: none !important;
   display: flex;
   flex-direction: column;
+  flex: 1;
 }
 
 main, [role="main"] {

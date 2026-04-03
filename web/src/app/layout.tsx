@@ -39,7 +39,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="h-full flex flex-col" style={{ height: "100vh", width: "100vw", paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)", paddingLeft: "env(safe-area-inset-left)", paddingRight: "env(safe-area-inset-right)" }}>{children}</body>
+      <body className="h-full flex flex-col" style={{ height: "100vh", width: "100vw" }}>{children}</body>
     </html>
   );
 }

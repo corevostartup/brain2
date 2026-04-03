@@ -14,6 +14,10 @@ export default function Home() {
         overflow: "hidden",
         padding: 0,
         margin: 0,
+        border: "none",
+        position: "fixed",
+        top: 0,
+        left: 0,
       }}
     >
       {/* Welcome */}
