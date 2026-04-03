@@ -19,13 +19,11 @@
   margin: 0;
   padding: 0;
   touch-action: manipulation;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
 }
 
 html,
 body {
-  height: 100vh;
+  height: 100dvh;
   width: 100vw;
   background: var(--background);
   color: var(--foreground);
@@ -37,7 +35,6 @@ body {
   user-select: none;
   overflow: hidden !important;
   overscroll-behavior: none;
-  scrollbar-width: none !important;
   position: fixed;
   left: 0;
   top: 0;
@@ -64,11 +61,10 @@ body {
 }
 
 main, [role="main"] {
-  height: 100vh;
+  height: calc(100dvh - 140px);
   width: 100vw;
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
 }
 
 textarea:focus,

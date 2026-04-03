@@ -4,20 +4,17 @@ export default function Home() {
   return (
     <main
       style={{
-        height: "100vh",
+        height: "calc(100dvh - 140px)",
         width: "100vw",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "space-between",
+        justifyContent: "center",
         background: "var(--background)",
         overflow: "hidden",
         padding: 0,
         margin: 0,
         border: "none",
-        position: "fixed",
-        top: 0,
-        left: 0,
       }}
     >
       {/* Welcome */}
@@ -30,8 +27,6 @@ export default function Home() {
           gap: "10px",
           userSelect: "none",
           pointerEvents: "none",
-          flex: 1,
-          height: "auto",
         }}
       >
         <h1
