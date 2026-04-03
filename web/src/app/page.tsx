@@ -4,14 +4,16 @@ export default function Home() {
   return (
     <main
       style={{
-        height: "100%",
+        height: "100vh",
+        width: "100vw",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
+        justifyContent: "space-between",
         background: "var(--background)",
-        overflowY: "auto",
-        paddingBottom: "120px",
+        overflow: "hidden",
+        padding: 0,
+        margin: 0,
       }}
     >
       {/* Welcome */}
@@ -20,9 +22,12 @@ export default function Home() {
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
+          justifyContent: "center",
           gap: "10px",
           userSelect: "none",
           pointerEvents: "none",
+          flex: 1,
+          height: "auto",
         }}
       >
         <h1

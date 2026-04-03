@@ -121,20 +121,23 @@ export default function InputBar() {
       <style jsx>{`
         .input-bar-wrapper {
           position: fixed;
-          bottom: 0;
-          left: 0;
-          right: 0;
-          padding: 16px 16px 28px;
+          bottom: env(safe-area-inset-bottom);
+          left: env(safe-area-inset-left);
+          right: env(safe-area-inset-right);
+          width: calc(100vw - env(safe-area-inset-left) - env(safe-area-inset-right));
+          padding: 16px 16px calc(28px + env(safe-area-inset-bottom));
           background: linear-gradient(
             to top,
             rgba(12, 12, 12, 1) 60%,
             rgba(12, 12, 12, 0)
           );
           pointer-events: none;
+          z-index: 1000;
         }
 
         .input-bar {
           max-width: 780px;
+          width: calc(100% - 32px);
           margin: 0 auto;
           background: var(--bar-bg);
           border: 1px solid var(--bar-border);
