@@ -19,6 +19,8 @@
   margin: 0;
   padding: 0;
   touch-action: manipulation;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 html,
@@ -92,9 +94,3 @@ button:focus {
 ::-webkit-scrollbar-thumb {
   display: none !important;
 }
-
-/* Remove scrollbars - Firefox */
-scrollbar-width: none;
-
-/* Remove scrollbars - IE/Edge */
--ms-overflow-style: none;
