@@ -13,7 +13,7 @@ struct Brain2App: App {
         WindowGroup {
             ContentView()
         }
-        .defaultSize(width: 1280, height: 720)
+        .defaultSize(width: 1440, height: 720)
         .windowStyle(.hiddenTitleBar)
     }
 }

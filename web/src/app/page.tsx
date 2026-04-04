@@ -1,13 +1,75 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import InputBar from "@/components/InputBar";
 import DesktopSidebar from "@/components/DesktopSidebar";
+import BrainGraphView from "@/components/BrainGraphView";
+import SettingsView from "@/components/SettingsView";
 import { PanelLeftOpen } from "lucide-react";
+import {
+  loadDirectoryHandle,
+  verifyPermission,
+  buildGraphFromVault,
+  readFolderTree,
+  type VaultGraph,
+  type FolderTreeNode,
+} from "@/lib/vault";
 
 export default function Home() {
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isYourBrainOpen, setIsYourBrainOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [vaultHandle, setVaultHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [vaultGraph, setVaultGraph] = useState<VaultGraph | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [vaultFolders, setVaultFolders] = useState<FolderTreeNode[]>([]);
+
+  const activeView = isSettingsOpen ? "settings" : isYourBrainOpen ? "brain" : "home";
+
+  // Restore vault handle from IndexedDB on mount
+  useEffect(() => {
+    (async () => {
+      const stored = await loadDirectoryHandle();
+      if (stored) {
+        const ok = await verifyPermission(stored);
+        if (ok) {
+          setVaultHandle(stored);
+          readFolderTree(stored).then(setVaultFolders).catch(() => {});
+        }
+      }
+    })();
+  }, []);
+
+  const loadVaultGraph = useCallback(async (handle: FileSystemDirectoryHandle) => {
+    setGraphLoading(true);
+    try {
+      const graph = await buildGraphFromVault(handle);
+      setVaultGraph(graph);
+    } catch {
+      setVaultGraph(null);
+    }
+    setGraphLoading(false);
+  }, []);
+
+  // When opening brain view, build graph from vault
+  const handleOpenBrain = useCallback(async () => {
+    setIsSettingsOpen(false);
+    setIsYourBrainOpen(true);
+    if (vaultHandle) {
+      await loadVaultGraph(vaultHandle);
+    }
+  }, [vaultHandle, loadVaultGraph]);
+
+  const handleVaultChange = useCallback((handle: FileSystemDirectoryHandle | null) => {
+    setVaultHandle(handle);
+    if (!handle) {
+      setVaultGraph(null);
+      setVaultFolders([]);
+    } else {
+      readFolderTree(handle).then(setVaultFolders).catch(() => {});
+    }
+  }, []);
 
   return (
     <main
@@ -25,10 +87,30 @@ export default function Home() {
         border: "none",
       }}
     >
-      {!isSidebarHidden && <DesktopSidebar onHide={() => setIsSidebarHidden(true)} />}
+      {!isSidebarHidden && (
+        <DesktopSidebar
+          onHide={() => setIsSidebarHidden(true)}
+          onYourBrain={handleOpenBrain}
+          onSettings={() => { setIsYourBrainOpen(false); setIsSettingsOpen(true); }}
+          vaultFolders={vaultFolders}
+        />
+      )}
 
       {isMobileSidebarOpen && (
-        <DesktopSidebar onHide={() => setIsMobileSidebarOpen(false)} mobileFullscreen />
+        <DesktopSidebar
+          onHide={() => setIsMobileSidebarOpen(false)}
+          onYourBrain={() => {
+            setIsMobileSidebarOpen(false);
+            handleOpenBrain();
+          }}
+          onSettings={() => {
+            setIsMobileSidebarOpen(false);
+            setIsYourBrainOpen(false);
+            setIsSettingsOpen(true);
+          }}
+          mobileFullscreen
+          vaultFolders={vaultFolders}
+        />
       )}
 
       {!isMobileSidebarOpen && (
@@ -53,51 +135,71 @@ export default function Home() {
         </button>
       )}
 
-      {/* Welcome area */}
+      {/* Content area */}
       <section
         style={{
           flex: 1,
           display: "flex",
           flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: "10px",
-          height: "calc(100dvh - 120px)",
-          userSelect: "none",
-          pointerEvents: "none",
-          padding: "0 20px",
+          alignItems: activeView !== "home" ? "stretch" : "center",
+          justifyContent: activeView !== "home" ? "stretch" : "center",
+          gap: activeView !== "home" ? 0 : "10px",
+          height: "100dvh",
+          minHeight: 0,
+          userSelect: activeView !== "home" ? "auto" : "none",
+          pointerEvents: activeView !== "home" ? "all" : "none",
+          padding: activeView !== "home" ? 0 : "0 20px",
+          overflow: "hidden",
         }}
       >
-        <h1
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: "clamp(2rem, 5vw, 3.4rem)",
-            fontWeight: 500,
-            letterSpacing: "0.1em",
-            textTransform: "uppercase",
-            color: "#d4d4d4",
-            margin: 0,
-          }}
-        >
-          Brain2
-        </h1>
-        <p
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: "clamp(0.65rem, 1.4vw, 0.78rem)",
-            fontWeight: 300,
-            letterSpacing: "0.22em",
-            textTransform: "uppercase",
-            color: "#464646",
-            margin: 0,
-          }}
-        >
-          The Extension of Your Mind
-        </p>
+        {activeView === "brain" ? (
+          <BrainGraphView
+            onClose={() => setIsYourBrainOpen(false)}
+            graph={vaultGraph}
+            loading={graphLoading}
+          />
+        ) : activeView === "settings" ? (
+          <SettingsView
+            onClose={() => setIsSettingsOpen(false)}
+            onVaultChange={handleVaultChange}
+            vaultHandle={vaultHandle}
+          />
+        ) : (
+          <>
+            <h1
+              style={{
+                fontFamily: "'Inter', sans-serif",
+                fontSize: "clamp(2rem, 5vw, 3.4rem)",
+                fontWeight: 500,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: "#d4d4d4",
+                margin: 0,
+              }}
+            >
+              Brain2
+            </h1>
+            <p
+              style={{
+                fontFamily: "'Inter', sans-serif",
+                fontSize: "clamp(0.65rem, 1.4vw, 0.78rem)",
+                fontWeight: 300,
+                letterSpacing: "0.22em",
+                textTransform: "uppercase",
+                color: "#464646",
+                margin: 0,
+              }}
+            >
+              The Extension of Your Mind
+            </p>
+          </>
+        )}
       </section>
 
       {/* Bottom input bar */}
-      {!isMobileSidebarOpen && <InputBar desktopSidebarOffset={!isSidebarHidden} />}
+      {!isMobileSidebarOpen && activeView === "home" && (
+        <InputBar desktopSidebarOffset={!isSidebarHidden} />
+      )}
 
       <style jsx>{`
         .mobile-sidebar-open-btn {

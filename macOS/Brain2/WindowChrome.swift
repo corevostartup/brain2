@@ -42,19 +42,59 @@ struct WindowChromeConfigurator: NSViewRepresentable {
         view.onWindow = { win in
             guard let window = win else { return }
             DispatchQueue.main.async {
+                window.title = ""
                 window.titlebarAppearsTransparent = true
                 window.titleVisibility = .hidden
+                window.toolbar = nil
+                window.titlebarSeparatorStyle = .none
                 window.styleMask.insert(.fullSizeContentView)
-                window.standardWindowButton(.closeButton)?.isHidden = true
-                window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-                window.standardWindowButton(.zoomButton)?.isHidden = true
+                window.standardWindowButton(.closeButton)?.isHidden = false
+                window.standardWindowButton(.miniaturizeButton)?.isHidden = false
+                window.standardWindowButton(.zoomButton)?.isHidden = false
+                window.backgroundColor = NSColor(
+                    calibratedRed: 12 / 255,
+                    green: 12 / 255,
+                    blue: 12 / 255,
+                    alpha: 1
+                )
                 window.isMovableByWindowBackground = true
+                applySystemLikeTrafficLightsPosition(in: window)
+
+                // Reaplica apos o primeiro layout para evitar que o AppKit sobrescreva a posicao.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    applySystemLikeTrafficLightsPosition(in: window)
+                }
             }
         }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private func applySystemLikeTrafficLightsPosition(in window: NSWindow) {
+    guard
+        let close = window.standardWindowButton(.closeButton),
+        let mini = window.standardWindowButton(.miniaturizeButton),
+        let zoom = window.standardWindowButton(.zoomButton),
+        let container = close.superview
+    else {
+        return
+    }
+
+    let buttons = [close, mini, zoom]
+    let leftInset: CGFloat = 12
+    let topInset: CGFloat = 10
+    let spacing: CGFloat = 6
+
+    var x = leftInset
+    for button in buttons {
+        var frame = button.frame
+        frame.origin.x = x
+        frame.origin.y = max(0, container.bounds.height - frame.height - topInset)
+        button.frame = frame
+        x += frame.width + spacing
+    }
 }
 
 /// Área arrastável (substitui arrastar pela barra de título).
