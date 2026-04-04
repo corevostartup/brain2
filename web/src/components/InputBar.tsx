@@ -10,13 +10,20 @@ import {
   BrainCircuit,
 } from "lucide-react";
 
-type Mode = "Ask" | "Agent" | "Local" | "API";
+type Mode = "Ask" | "Agent";
+type ContextMode = "Local" | "API";
 
-const MODES: Mode[] = ["Ask", "Agent", "Local", "API"];
+const MODES: Mode[] = ["Ask", "Agent"];
+const CONTEXT_MODES: ContextMode[] = ["Local", "API"];
 
-export default function InputBar() {
+type InputBarProps = {
+  desktopSidebarOffset?: boolean;
+};
+
+export default function InputBar({ desktopSidebarOffset = false }: InputBarProps) {
   const [value, setValue] = useState("");
   const [activeMode, setActiveMode] = useState<Mode>("Ask");
+  const [activeContextMode, setActiveContextMode] = useState<ContextMode>("Local");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const autoResize = useCallback(() => {
@@ -50,7 +57,9 @@ export default function InputBar() {
   const canSend = value.trim().length > 0;
 
   return (
-    <div className="input-bar-wrapper">
+    <div
+      className={`input-bar-wrapper${desktopSidebarOffset ? " input-bar-wrapper--with-sidebar" : ""}`}
+    >
       <div className="input-bar">
         {/* ── Desktop: single row ── */}
         <div className="bar-inner">
@@ -60,13 +69,28 @@ export default function InputBar() {
               <Plus size={15} strokeWidth={1.8} />
             </button>
 
-            <div className="mode-pills" role="group" aria-label="Modo">
+            <div className="mode-selector" role="radiogroup" aria-label="Modo">
               {MODES.map((m) => (
                 <button
                   key={m}
-                  className={`pill${activeMode === m ? " pill--active" : ""}`}
+                  className={`mode-option${activeMode === m ? " mode-option--active" : ""}`}
                   onClick={() => setActiveMode(m)}
-                  aria-pressed={activeMode === m}
+                  role="radio"
+                  aria-checked={activeMode === m}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+
+            <div className="mode-selector context-selector" role="radiogroup" aria-label="Contexto">
+              {CONTEXT_MODES.map((m) => (
+                <button
+                  key={m}
+                  className={`mode-option${activeContextMode === m ? " mode-option--active" : ""}`}
+                  onClick={() => setActiveContextMode(m)}
+                  role="radio"
+                  aria-checked={activeContextMode === m}
                 >
                   {m}
                 </button>
@@ -124,6 +148,8 @@ export default function InputBar() {
           bottom: env(safe-area-inset-bottom);
           left: 0;
           right: 0;
+          display: flex;
+          justify-content: center;
           width: 100vw;
           padding: 16px 16px max(28px, env(safe-area-inset-bottom));
           background: linear-gradient(
@@ -137,10 +163,16 @@ export default function InputBar() {
           transition: bottom 0.15s ease-out;
         }
 
+        @media (min-width: 980px) {
+          .input-bar-wrapper--with-sidebar {
+            left: var(--desktop-sidebar-width);
+            right: auto;
+            width: calc(100vw - var(--desktop-sidebar-width));
+          }
+        }
+
         .input-bar {
-          max-width: 780px;
-          width: calc(100% - 32px);
-          margin: 0 auto;
+          width: min(780px, calc(100% - 32px));
           background: var(--bar-bg);
           border: 1px solid var(--bar-border);
           border-radius: 18px;
@@ -155,8 +187,9 @@ export default function InputBar() {
         .bar-inner {
           display: flex;
           align-items: center;
+          flex-wrap: wrap;
           gap: 8px;
-          padding: 10px 12px 10px 10px;
+          padding: 10px 12px 8px 10px;
         }
 
         /* ── Left ── */
@@ -169,7 +202,9 @@ export default function InputBar() {
 
         /* ── Input ── */
         .main-input {
-          flex: 1;
+          order: -1;
+          width: 100%;
+          flex: 0 0 100%;
           background: transparent;
           border: none;
           resize: none;
@@ -197,6 +232,7 @@ export default function InputBar() {
           align-items: center;
           gap: 4px;
           flex-shrink: 0;
+          margin-left: auto;
         }
 
         /* ── Shared buttons ── */
@@ -220,18 +256,23 @@ export default function InputBar() {
         }
 
         /* ── Mode pills ── */
-        .mode-pills {
+        .mode-selector {
           display: flex;
           align-items: center;
           gap: 2px;
+          height: 28px;
+          border: 1px solid var(--bar-border);
+          border-radius: 8px;
+          padding: 1px;
+          background: rgba(255, 255, 255, 0.02);
         }
 
-        .pill {
+        .mode-option {
           display: flex;
           align-items: center;
           height: 26px;
           padding: 0 9px;
-          border-radius: 7px;
+          border-radius: 6px;
           border: none;
           background: transparent;
           color: var(--muted);
@@ -244,15 +285,21 @@ export default function InputBar() {
           transition: color 0.15s ease, background 0.15s ease;
         }
 
-        .pill:hover {
+        .mode-option:hover {
           color: var(--muted-hover);
           background: var(--pill-bg);
         }
 
-        .pill--active {
+        .mode-option--active {
           color: var(--foreground);
           background: var(--pill-active);
           font-weight: 500;
+        }
+
+        @media (max-width: 979px) {
+          .context-selector {
+            display: none;
+          }
         }
 
         /* ── Model button ── */
@@ -320,23 +367,15 @@ export default function InputBar() {
           }
 
           .bar-inner {
-            flex-wrap: wrap;
             gap: 6px;
             padding: 10px 10px 8px;
           }
 
           .main-input {
-            order: -1;
-            width: 100%;
-            flex-basis: 100%;
           }
 
           .left-actions {
             flex: 1;
-          }
-
-          .right-actions {
-            margin-left: auto;
           }
         }
       `}</style>
