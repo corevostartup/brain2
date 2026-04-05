@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import type { FolderTreeNode, VaultConversation } from "@/lib/vault";
 
+const HIDDEN_ROOT_FOLDERS = new Set(["Brain2Memories"]);
+
 type FolderRow = {
   name: string;
   path: string;
@@ -28,6 +30,10 @@ function collectFolderRows(
 
   for (const node of nodes) {
     if (node.kind !== "folder") {
+      continue;
+    }
+
+    if (depth === 0 && HIDDEN_ROOT_FOLDERS.has(node.name)) {
       continue;
     }
 
@@ -51,6 +57,7 @@ function formatModifiedDate(timestamp: number): string {
 
 type DesktopSidebarProps = {
   onHide: () => void;
+  onNewConversation?: () => void;
   onYourBrain?: () => void;
   onSettings?: () => void;
   mobileFullscreen?: boolean;
@@ -64,6 +71,7 @@ type DesktopSidebarProps = {
 
 export default function DesktopSidebar({
   onHide,
+  onNewConversation,
   onYourBrain,
   onSettings,
   mobileFullscreen = false,
@@ -96,9 +104,6 @@ export default function DesktopSidebar({
         <div className="brand-row">
           <h2>Brain2</h2>
           <div className="brand-actions">
-            <button className="icon-btn" aria-label="Novo chat">
-              <Plus size={14} strokeWidth={2} />
-            </button>
             <button className="icon-btn" aria-label="Ocultar barra lateral" onClick={onHide}>
               <PanelLeftClose size={14} strokeWidth={2} />
             </button>
@@ -106,10 +111,15 @@ export default function DesktopSidebar({
         </div>
 
         <div className="search-stack">
-          <label className="search-field" aria-label="Buscar conversas">
-            <Search size={13} strokeWidth={1.8} />
-            <input type="text" placeholder="Buscar conversas" />
-          </label>
+          <div className="search-row">
+            <label className="search-field" aria-label="Buscar conversas">
+              <Search size={13} strokeWidth={1.8} />
+              <input type="text" placeholder="Buscar conversas" />
+            </label>
+            <button className="icon-btn" aria-label="Novo chat" onClick={onNewConversation}>
+              <Plus size={14} strokeWidth={2} />
+            </button>
+          </div>
         </div>
 
         <button className="your-brain-btn" type="button" aria-label="Your Brain" onClick={onYourBrain}>
@@ -304,10 +314,17 @@ export default function DesktopSidebar({
           gap: 8px;
         }
 
+        .search-row {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
         .search-field {
           display: flex;
           align-items: center;
           gap: 6px;
+          flex: 1;
           height: 32px;
           border-radius: 10px;
           border: 1px solid var(--bar-border);

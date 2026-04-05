@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
-import { X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, Copy, Volume2, X } from "lucide-react";
 import type { VaultConversation } from "@/lib/vault";
 
 type ConversationMessage = {
@@ -17,14 +17,52 @@ type ConversationViewProps = {
 
 function roleFromLabel(label: string): "user" | "assistant" {
   const normalized = label.trim().toLowerCase();
-  if (["user", "usuario", "usuário", "you", "voce", "você"].includes(normalized)) {
+  if (["user", "utilizador", "usuario", "usuário", "you", "voce", "você"].includes(normalized)) {
     return "user";
   }
   return "assistant";
 }
 
-function parseConversationMarkdown(content: string): ConversationMessage[] {
+function stripLeadingFrontmatter(content: string): string {
   const lines = content.replace(/\r\n/g, "\n").split("\n");
+  if (lines.length === 0 || lines[0].trim() !== "---") {
+    return content;
+  }
+
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].trim() === "---") {
+      return lines.slice(index + 1).join("\n");
+    }
+  }
+
+  return content;
+}
+
+function parseRoleMarker(line: string): {
+  role: "user" | "assistant";
+  inlineText: string;
+} | null {
+  const markerMatch = line.match(
+    /^\s*(#{1,6}\s*)?(user|utilizador|usuario|usuário|you|voce|você|assistant|chatgpt|ai|brain2|brain)\b(?:\s*([:\-–—])\s*(.*))?\s*$/i
+  );
+
+  if (!markerMatch) {
+    return null;
+  }
+
+  const hasHeadingPrefix = Boolean(markerMatch[1]);
+  const role = roleFromLabel(markerMatch[2]);
+  const separator = markerMatch[3] ?? "";
+  const tail = (markerMatch[4] ?? "").trim();
+
+  const inlineText = (!hasHeadingPrefix && separator === ":" && tail.length > 0) ? tail : "";
+
+  return { role, inlineText };
+}
+
+function parseConversationMarkdown(content: string): ConversationMessage[] {
+  const sanitizedContent = stripLeadingFrontmatter(content);
+  const lines = sanitizedContent.replace(/\r\n/g, "\n").split("\n");
   const messages: ConversationMessage[] = [];
   let currentRole: "user" | "assistant" = "assistant";
   let buffer: string[] = [];
@@ -41,28 +79,39 @@ function parseConversationMarkdown(content: string): ConversationMessage[] {
     buffer = [];
   };
 
-  for (const line of lines) {
-    const inlineRoleMatch = line.match(
-      /^\s*(?:#{1,6}\s*)?(user|usuario|usuário|you|voce|você|assistant|chatgpt|ai|brain2)\s*:\s*(.*)$/i
-    );
+  const firstRoleLine = lines.findIndex((line) => parseRoleMarker(line) !== null);
 
-    if (inlineRoleMatch) {
-      flush();
-      currentRole = roleFromLabel(inlineRoleMatch[1]);
-      const inlineText = inlineRoleMatch[2].trim();
-      if (inlineText.length > 0) {
-        buffer.push(inlineText);
-      }
-      continue;
+  if (firstRoleLine === -1) {
+    const fallback = sanitizedContent.trim();
+    if (fallback.length > 0) {
+      return [
+        {
+          id: "fallback-1",
+          role: "assistant",
+          content: fallback,
+        },
+      ];
     }
 
-    const roleMarkerOnly = line.match(
-      /^\s*(?:#{1,6}\s*)?(user|usuario|usuário|you|voce|você|assistant|chatgpt|ai|brain2)\s*:?\s*$/i
-    );
+    return [
+      {
+        id: "fallback-1",
+        role: "assistant",
+        content: "Sem conteúdo nesta conversa.",
+      },
+    ];
+  }
 
-    if (roleMarkerOnly) {
+  for (let index = firstRoleLine; index < lines.length; index += 1) {
+    const line = lines[index];
+    const marker = parseRoleMarker(line);
+
+    if (marker) {
       flush();
-      currentRole = roleFromLabel(roleMarkerOnly[1]);
+      currentRole = marker.role;
+      if (marker.inlineText.length > 0) {
+        buffer.push(marker.inlineText);
+      }
       continue;
     }
 
@@ -76,7 +125,7 @@ function parseConversationMarkdown(content: string): ConversationMessage[] {
       {
         id: "fallback-1",
         role: "assistant",
-        content: content.trim() || "Sem conteúdo nesta conversa.",
+        content: "Sem conteúdo nesta conversa.",
       },
     ];
   }
@@ -99,6 +148,35 @@ export default function ConversationView({ conversation, onClose }: Conversation
     () => parseConversationMarkdown(conversation.content),
     [conversation.content]
   );
+  const copyTimeoutRef = useRef<number | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const copyMessage = async (messageId: string, content: string) => {
+    if (!content) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMessageId(messageId);
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = window.setTimeout(() => {
+        setCopiedMessageId((current) => (current === messageId ? null : current));
+      }, 1800);
+    } catch {
+      setCopiedMessageId(null);
+    }
+  };
 
   return (
     <div className="conversation-root">
@@ -125,6 +203,28 @@ export default function ConversationView({ conversation, onClose }: Conversation
               className={`message-bubble${message.role === "user" ? " message-bubble--user" : ""}`}
             >
               <p>{message.content}</p>
+              {message.role === "assistant" && (
+                <div className="message-actions" aria-label="Ações da resposta">
+                  <button
+                    className="message-action-btn"
+                    type="button"
+                    onClick={() => copyMessage(message.id, message.content)}
+                    aria-label="Copiar resposta"
+                    title="Copiar resposta"
+                  >
+                    {copiedMessageId === message.id ? <Check size={14} /> : <Copy size={14} />}
+                  </button>
+                  <button
+                    className="message-action-btn message-action-btn--disabled"
+                    type="button"
+                    aria-label="Ouvir resposta (em breve)"
+                    title="Ouvir resposta (em breve)"
+                    disabled
+                  >
+                    <Volume2 size={14} />
+                  </button>
+                </div>
+              )}
             </article>
           </div>
         ))}
@@ -201,6 +301,9 @@ export default function ConversationView({ conversation, onClose }: Conversation
           display: flex;
           flex-direction: column;
           gap: 14px;
+          user-select: text;
+          -webkit-user-select: text;
+          -webkit-touch-callout: default;
         }
 
         .message-row {
@@ -233,6 +336,47 @@ export default function ConversationView({ conversation, onClose }: Conversation
           color: var(--foreground);
           white-space: pre-wrap;
           word-break: break-word;
+          user-select: text;
+          -webkit-user-select: text;
+          cursor: text;
+        }
+
+        .message-actions {
+          margin-top: 4px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .message-row--user .message-actions {
+          justify-content: flex-end;
+        }
+
+        .message-action-btn {
+          width: 26px;
+          height: 26px;
+          border: 1px solid transparent;
+          border-radius: 7px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          color: #767676;
+          transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .message-action-btn:hover {
+          background: rgba(0, 0, 0, 0.04);
+          border-color: rgba(0, 0, 0, 0.08);
+          color: #3e3e3e;
+        }
+
+        .message-action-btn--disabled,
+        .message-action-btn--disabled:hover {
+          opacity: 0.45;
+          cursor: default;
+          background: transparent;
+          border-color: transparent;
         }
 
         @media (max-width: 979px) {

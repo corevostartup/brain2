@@ -79,6 +79,10 @@ struct WebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         static let messageHandlerName = "brain2Native"
         private static let selectedVaultPathDefaultsKey = "brain2-selected-vault-path"
+        private static let selectedVaultBookmarkDefaultsKey = "brain2-selected-vault-bookmark"
+        private static let memoriesFolderName = "Brain2Memories"
+        private static let llmModelDefaultsKey = "brain2-llm-model"
+        private static let llmApiKeyDefaultsKey = "brain2-llm-api-key"
 
         private weak var webView: WKWebView?
         private let fileManager = FileManager.default
@@ -106,21 +110,150 @@ struct WebView: NSViewRepresentable {
 
             if type == "pickDirectory" {
                 presentDirectoryPicker()
+                return
+            }
+
+            if type == "saveConversation" {
+                let conversationPayload = payload["payload"] as? [String: Any] ?? [:]
+                saveConversationToVault(conversationPayload)
+                return
+            }
+
+            if type == "saveLlmConfig" {
+                let llmPayload = payload["payload"] as? [String: Any] ?? [:]
+                saveLlmConfig(llmPayload)
+                return
+            }
+
+            if type == "clearLlmConfig" {
+                clearLlmConfig()
             }
         }
 
+        private func saveLlmConfig(_ payload: [String: Any]) {
+            let model = (payload["model"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let apiKey = (payload["apiKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            if model.isEmpty || apiKey.isEmpty {
+                return
+            }
+
+            UserDefaults.standard.set(model, forKey: Self.llmModelDefaultsKey)
+            UserDefaults.standard.set(apiKey, forKey: Self.llmApiKeyDefaultsKey)
+        }
+
+        private func clearLlmConfig() {
+            UserDefaults.standard.removeObject(forKey: Self.llmModelDefaultsKey)
+            UserDefaults.standard.removeObject(forKey: Self.llmApiKeyDefaultsKey)
+        }
+
         private func injectNativeBridge() {
+            let llmModel = UserDefaults.standard.string(forKey: Self.llmModelDefaultsKey) ?? ""
+            let llmApiKey = UserDefaults.standard.string(forKey: Self.llmApiKeyDefaultsKey) ?? ""
+            let llmConfigJSON: String
+
+            if llmApiKey.isEmpty {
+                llmConfigJSON = "null"
+            } else {
+                let llmObject: [String: String] = [
+                    "model": llmModel.isEmpty ? "gpt-5.4-mini" : llmModel,
+                    "apiKey": llmApiKey,
+                ]
+
+                if
+                    let data = try? JSONSerialization.data(withJSONObject: llmObject),
+                    let json = String(data: data, encoding: .utf8)
+                {
+                    llmConfigJSON = json
+                } else {
+                    llmConfigJSON = "null"
+                }
+            }
+
             let script = """
             window.Brain2Native = window.Brain2Native || {};
             window.Brain2Native.isAvailable = true;
+                        window.Brain2Native.llmConfig = \(llmConfigJSON);
             window.Brain2Native.pickDirectory = function () {
               try {
                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'pickDirectory' });
               } catch (_) {}
             };
+            window.Brain2Native.saveConversation = function (payload) {
+              try {
+                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'saveConversation', payload: payload || {} });
+              } catch (_) {}
+            };
+                        window.Brain2Native.saveLlmConfig = function (payload) {
+                            try {
+                                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'saveLlmConfig', payload: payload || {} });
+                            } catch (_) {}
+                        };
+                        window.Brain2Native.clearLlmConfig = function () {
+                            try {
+                                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'clearLlmConfig' });
+                            } catch (_) {}
+                        };
             window.dispatchEvent(new CustomEvent('brain2-native-bridge-ready'));
             """
             webView?.evaluateJavaScript(script, completionHandler: nil)
+        }
+
+        private func saveConversationToVault(_ payload: [String: Any]) {
+            guard let vaultURL = resolvePersistedVaultURL() else {
+                return
+            }
+
+            guard
+                let markdown = payload["markdown"] as? String,
+                !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return
+            }
+
+            let conversationID = (payload["conversationId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawTitle = (payload["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+
+                self.withSecurityScopedAccess(to: vaultURL) {
+                    let memoriesURL = vaultURL.appendingPathComponent(Self.memoriesFolderName, isDirectory: true)
+
+                    do {
+                        try self.fileManager.createDirectory(
+                            at: memoriesURL,
+                            withIntermediateDirectories: true,
+                            attributes: nil
+                        )
+
+                        let safeConversationID = self.sanitizeFileName(conversationID ?? "chat-\(Int(Date().timeIntervalSince1970))")
+                        let safeTitle = self.sanitizeFileName(rawTitle ?? "conversation")
+                        let filename = "\(safeConversationID)-\(safeTitle).md"
+                        let fileURL = memoriesURL.appendingPathComponent(filename)
+
+                        try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+                    } catch {
+                        return
+                    }
+
+                    self.publishVaultSelection(for: vaultURL)
+                }
+            }
+        }
+
+        private func sanitizeFileName(_ raw: String) -> String {
+            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+            let scalars = raw.lowercased().unicodeScalars.map { scalar -> Character in
+                allowed.contains(scalar) ? Character(scalar) : "-"
+            }
+            let compact = String(scalars)
+                .replacingOccurrences(of: "--+", with: "-", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            if compact.isEmpty {
+                return "conversation"
+            }
+            return compact
         }
 
         private func presentDirectoryPicker() {
@@ -139,27 +272,68 @@ struct WebView: NSViewRepresentable {
                 guard panel.runModal() == .OK, let selectedURL = panel.url else { return }
 
                 UserDefaults.standard.set(selectedURL.path, forKey: Self.selectedVaultPathDefaultsKey)
+                if let bookmarkData = try? selectedURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+                    UserDefaults.standard.set(bookmarkData, forKey: Self.selectedVaultBookmarkDefaultsKey)
+                }
                 self.publishVaultSelection(for: selectedURL)
             }
         }
 
         private func publishPersistedVaultIfAvailable() {
-            guard let path = UserDefaults.standard.string(forKey: Self.selectedVaultPathDefaultsKey) else { return }
+            guard let persistedURL = resolvePersistedVaultURL() else { return }
 
             var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            guard fileManager.fileExists(atPath: persistedURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
                 return
             }
 
-            publishVaultSelection(for: URL(fileURLWithPath: path))
+            publishVaultSelection(for: persistedURL)
         }
 
         private func publishVaultSelection(for rootURL: URL) {
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self else { return }
-                let payload = self.buildVaultPayload(for: rootURL)
-                self.publish(payload: payload)
+                self.withSecurityScopedAccess(to: rootURL) {
+                    let payload = self.buildVaultPayload(for: rootURL)
+                    self.publish(payload: payload)
+                }
             }
+        }
+
+        private func resolvePersistedVaultURL() -> URL? {
+            if
+                let bookmarkData = UserDefaults.standard.data(forKey: Self.selectedVaultBookmarkDefaultsKey)
+            {
+                var isStale = false
+                if let resolvedURL = try? URL(
+                    resolvingBookmarkData: bookmarkData,
+                    options: [.withSecurityScope],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                ) {
+                    if isStale,
+                       let refreshed = try? resolvedURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
+                        UserDefaults.standard.set(refreshed, forKey: Self.selectedVaultBookmarkDefaultsKey)
+                    }
+                    return resolvedURL
+                }
+            }
+
+            if let path = UserDefaults.standard.string(forKey: Self.selectedVaultPathDefaultsKey), !path.isEmpty {
+                return URL(fileURLWithPath: path, isDirectory: true)
+            }
+
+            return nil
+        }
+
+        private func withSecurityScopedAccess(to url: URL, perform: () -> Void) {
+            let granted = url.startAccessingSecurityScopedResource()
+            defer {
+                if granted {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            perform()
         }
 
         private func buildVaultPayload(for rootURL: URL) -> [String: Any] {

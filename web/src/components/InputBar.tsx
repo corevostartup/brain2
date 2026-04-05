@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import {
   Plus,
   Mic,
@@ -15,16 +15,123 @@ type ContextMode = "Local" | "API";
 
 const MODES: Mode[] = ["Ask", "Agent"];
 const CONTEXT_MODES: ContextMode[] = ["Local", "API"];
+const LLM_STORAGE_KEY = "brain2-llm-config";
+const LLM_MODEL_STORAGE_KEY = "brain2-llm-model";
+const LLM_API_KEY_STORAGE_KEY = "brain2-llm-api-key";
+
+type NativeBridge = {
+  llmConfig?: {
+    model?: string;
+    apiKey?: string;
+  };
+  saveLlmConfig?: (payload: { model: string; apiKey: string }) => void;
+  clearLlmConfig?: () => void;
+};
+
+type LlmConfig = {
+  model: string;
+  apiKey: string;
+};
+
+function loadLlmConfig(): LlmConfig | null {
+  if (typeof window === "undefined") return null;
+
+  const modelStored = localStorage.getItem(LLM_MODEL_STORAGE_KEY)?.trim() ?? "";
+  const apiKeyStored = localStorage.getItem(LLM_API_KEY_STORAGE_KEY)?.trim() ?? "";
+  if (apiKeyStored) {
+    return {
+      model: modelStored || "gpt-5.4-mini",
+      apiKey: apiKeyStored,
+    };
+  }
+
+  try {
+    const raw = localStorage.getItem(LLM_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<LlmConfig>;
+      const parsedApiKey = parsed.apiKey?.trim() ?? "";
+      const parsedModel = parsed.model?.trim() ?? "";
+      if (parsedApiKey) {
+        return {
+          model: parsedModel || "gpt-5.4-mini",
+          apiKey: parsedApiKey,
+        };
+      }
+    }
+  } catch {
+    // ignore malformed localStorage object
+  }
+
+  const nativeConfig = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native?.llmConfig;
+  const nativeApiKey = nativeConfig?.apiKey?.trim() ?? "";
+  const nativeModel = nativeConfig?.model?.trim() ?? "";
+  if (nativeApiKey) {
+    return {
+      model: nativeModel || "gpt-5.4-mini",
+      apiKey: nativeApiKey,
+    };
+  }
+
+  return null;
+}
+
+function maskApiKey(key: string): string {
+  if (!key) return "não configurada";
+  if (key.length <= 8) {
+    return `${key.slice(0, 2)}****`;
+  }
+  return `${key.slice(0, 4)}••••${key.slice(-4)}`;
+}
 
 type InputBarProps = {
   desktopSidebarOffset?: boolean;
+  isSending?: boolean;
+  onSend?: (payload: { content: string; model: string; apiKey: string }) => Promise<void>;
 };
 
-export default function InputBar({ desktopSidebarOffset = false }: InputBarProps) {
+export default function InputBar({ desktopSidebarOffset = false, isSending = false, onSend }: InputBarProps) {
   const [value, setValue] = useState("");
   const [activeMode, setActiveMode] = useState<Mode>("Ask");
   const [activeContextMode, setActiveContextMode] = useState<ContextMode>("Local");
+  const [isLlmConfigOpen, setIsLlmConfigOpen] = useState(false);
+  const [llmModel, setLlmModel] = useState(() => loadLlmConfig()?.model ?? "gpt-5.4-mini");
+  const [llmApiKey, setLlmApiKey] = useState(() => loadLlmConfig()?.apiKey ?? "");
+  const [draftModel, setDraftModel] = useState("gpt-5.4-mini");
+  const [draftApiKey, setDraftApiKey] = useState("");
+  const [llmStatus, setLlmStatus] = useState<"idle" | "error" | "saved">("idle");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const hasConfiguredApiKey = llmApiKey.trim().length > 0;
+
+  useEffect(() => {
+    if (!isLlmConfigOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsLlmConfigOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isLlmConfigOpen]);
+
+  useEffect(() => {
+    const syncFromNative = () => {
+      const saved = loadLlmConfig();
+      if (!saved) return;
+      setLlmModel(saved.model);
+      setLlmApiKey(saved.apiKey);
+    };
+
+    window.addEventListener("brain2-native-bridge-ready", syncFromNative);
+    const timer = window.setTimeout(syncFromNative, 0);
+
+    return () => {
+      window.removeEventListener("brain2-native-bridge-ready", syncFromNative);
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   const autoResize = useCallback(() => {
     const el = textareaRef.current;
@@ -41,26 +148,90 @@ export default function InputBar({ desktopSidebarOffset = false }: InputBarProps
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit();
+      void handleSubmit();
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (isSending) return;
     if (!value.trim()) return;
-    // TODO: connect to API
+
+    if (!llmModel.trim() || !llmApiKey.trim()) {
+      setLlmStatus("error");
+      openLlmConfig();
+      return;
+    }
+
+    if (onSend) {
+      await onSend({
+        content: value.trim(),
+        model: llmModel.trim(),
+        apiKey: llmApiKey.trim(),
+      });
+    }
+
     setValue("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
   };
 
+  const openLlmConfig = () => {
+    setDraftModel(llmModel);
+    setDraftApiKey(llmApiKey);
+    setLlmStatus("idle");
+    setIsLlmConfigOpen(true);
+  };
+
+  const saveLlmConfig = () => {
+    const nextModel = draftModel.trim();
+    const nextApiKey = draftApiKey.trim();
+    if (!nextModel || !nextApiKey) {
+      setLlmStatus("error");
+      return;
+    }
+
+    const nextConfig: LlmConfig = {
+      model: nextModel,
+      apiKey: nextApiKey,
+    };
+
+    localStorage.setItem(LLM_STORAGE_KEY, JSON.stringify(nextConfig));
+    localStorage.setItem(LLM_MODEL_STORAGE_KEY, nextModel);
+    localStorage.setItem(LLM_API_KEY_STORAGE_KEY, nextApiKey);
+
+    const nativeBridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
+    nativeBridge?.saveLlmConfig?.({ model: nextModel, apiKey: nextApiKey });
+
+    setLlmModel(nextModel);
+    setLlmApiKey(nextApiKey);
+    setLlmStatus("saved");
+    setIsLlmConfigOpen(false);
+  };
+
+  const clearLlmConfig = () => {
+    localStorage.removeItem(LLM_STORAGE_KEY);
+    localStorage.removeItem(LLM_MODEL_STORAGE_KEY);
+    localStorage.removeItem(LLM_API_KEY_STORAGE_KEY);
+
+    const nativeBridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
+    nativeBridge?.clearLlmConfig?.();
+
+    setLlmApiKey("");
+    setLlmModel("gpt-5.4-mini");
+    setDraftModel("gpt-5.4-mini");
+    setDraftApiKey("");
+    setLlmStatus("idle");
+  };
+
   const canSend = value.trim().length > 0;
 
   return (
-    <div
-      className={`input-bar-wrapper${desktopSidebarOffset ? " input-bar-wrapper--with-sidebar" : ""}`}
-    >
-      <div className="input-bar">
+    <>
+      <div
+        className={`input-bar-wrapper${desktopSidebarOffset ? " input-bar-wrapper--with-sidebar" : ""}`}
+      >
+        <div className="input-bar">
         {/* ── Desktop: single row ── */}
         <div className="bar-inner">
           {/* Left actions */}
@@ -117,12 +288,17 @@ export default function InputBar({ desktopSidebarOffset = false }: InputBarProps
               <BrainCircuit size={15} strokeWidth={1.5} />
             </button>
 
-            <button className="model-btn hidden-mobile" aria-label="Selecionar modelo">
-              <span>gpt-5.4-mini</span>
+            <button className="model-btn hidden-mobile" aria-label="Selecionar modelo" onClick={openLlmConfig}>
+              <span>{llmModel}</span>
               <ChevronDown size={12} strokeWidth={1.8} />
             </button>
 
-            <button className="icon-btn hidden-mobile" aria-label="Chave de API">
+            <button
+              className={`icon-btn${hasConfiguredApiKey ? " icon-btn--configured" : ""}`}
+              aria-label="Chave de API"
+              title={hasConfiguredApiKey ? `API key: ${maskApiKey(llmApiKey)}` : "Configurar API key"}
+              onClick={openLlmConfig}
+            >
               <Key size={14} strokeWidth={1.8} />
             </button>
 
@@ -132,8 +308,10 @@ export default function InputBar({ desktopSidebarOffset = false }: InputBarProps
 
             <button
               className={`send-btn${canSend ? " send-btn--active" : ""}`}
-              onClick={handleSubmit}
-              disabled={!canSend}
+              onClick={() => {
+                void handleSubmit();
+              }}
+              disabled={!canSend || isSending}
               aria-label="Enviar mensagem"
             >
               <ArrowUp size={16} strokeWidth={2} />
@@ -141,6 +319,70 @@ export default function InputBar({ desktopSidebarOffset = false }: InputBarProps
           </div>
         </div>
       </div>
+      </div>
+
+      {isLlmConfigOpen && (
+        <div className="llm-modal-overlay" onClick={() => setIsLlmConfigOpen(false)}>
+          <div
+            className="llm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Configurar modelo LLM"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>Adicionar modelo LLM</h3>
+            <p className="llm-modal-description">
+              Defina o modelo e a chave da API para usar no Brain2.
+            </p>
+
+            <label className="llm-field">
+              <span>Modelo</span>
+              <input
+                type="text"
+                value={draftModel}
+                onChange={(event) => {
+                  setDraftModel(event.target.value);
+                  if (llmStatus !== "idle") setLlmStatus("idle");
+                }}
+                placeholder="ex: gpt-4o-mini, claude-3-7-sonnet"
+                spellCheck={false}
+              />
+            </label>
+
+            <label className="llm-field">
+              <span>API key</span>
+              <input
+                type="password"
+                value={draftApiKey}
+                onChange={(event) => {
+                  setDraftApiKey(event.target.value);
+                  if (llmStatus !== "idle") setLlmStatus("idle");
+                }}
+                placeholder="sk-..."
+                spellCheck={false}
+              />
+            </label>
+
+            {llmStatus === "error" && (
+              <p className="llm-status llm-status--error">
+                Preencha modelo e API key para salvar.
+              </p>
+            )}
+
+            <div className="llm-actions">
+              <button className="llm-btn llm-btn--ghost" onClick={() => setIsLlmConfigOpen(false)}>
+                Cancelar
+              </button>
+              <button className="llm-btn llm-btn--ghost" onClick={clearLlmConfig}>
+                Limpar
+              </button>
+              <button className="llm-btn llm-btn--primary" onClick={saveLlmConfig}>
+                Salvar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         .input-bar-wrapper {
@@ -255,6 +497,15 @@ export default function InputBar({ desktopSidebarOffset = false }: InputBarProps
           background: var(--pill-active);
         }
 
+        .icon-btn--configured {
+          color: #48bf84;
+        }
+
+        .icon-btn--configured:hover {
+          color: #61d79b;
+          background: rgba(72, 191, 132, 0.12);
+        }
+
         /* ── Mode pills ── */
         .mode-selector {
           display: flex;
@@ -356,6 +607,121 @@ export default function InputBar({ desktopSidebarOffset = false }: InputBarProps
           cursor: default;
         }
 
+        .llm-modal-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 1400;
+          background: rgba(0, 0, 0, 0.55);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 18px;
+        }
+
+        .llm-modal {
+          width: min(460px, 100%);
+          border: 1px solid var(--bar-border);
+          border-radius: 14px;
+          background: #131313;
+          padding: 18px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .llm-modal h3 {
+          margin: 0;
+          font-family: 'Inter', sans-serif;
+          font-size: 14px;
+          font-weight: 500;
+          color: var(--foreground);
+        }
+
+        .llm-modal-description {
+          margin: 0;
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          color: #707070;
+          line-height: 1.45;
+        }
+
+        .llm-field {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .llm-field span {
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          color: #8a8a8a;
+          letter-spacing: 0.02em;
+        }
+
+        .llm-field input {
+          height: 38px;
+          border: 1px solid var(--bar-border);
+          border-radius: 10px;
+          background: rgba(255, 255, 255, 0.02);
+          color: var(--foreground);
+          padding: 0 12px;
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+        }
+
+        .llm-field input:focus {
+          border-color: var(--bar-border-hover);
+        }
+
+        .llm-status {
+          margin: 0;
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+        }
+
+        .llm-status--error {
+          color: #c67878;
+        }
+
+        .llm-actions {
+          margin-top: 4px;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+        }
+
+        .llm-btn {
+          height: 34px;
+          border-radius: 9px;
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          padding: 0 12px;
+          transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .llm-btn--ghost {
+          border: 1px solid var(--bar-border);
+          color: var(--muted);
+          background: transparent;
+        }
+
+        .llm-btn--ghost:hover {
+          color: var(--muted-hover);
+          background: var(--pill-bg);
+        }
+
+        .llm-btn--primary {
+          border: 1px solid var(--bar-border-hover);
+          color: #0c0c0c;
+          background: rgba(255, 255, 255, 0.9);
+          font-weight: 500;
+        }
+
+        .llm-btn--primary:hover {
+          background: #ffffff;
+        }
+
         /* ── Mobile ── */
         @media (max-width: 600px) {
           .input-bar-wrapper {
@@ -371,14 +737,11 @@ export default function InputBar({ desktopSidebarOffset = false }: InputBarProps
             padding: 10px 10px 8px;
           }
 
-          .main-input {
-          }
-
           .left-actions {
             flex: 1;
           }
         }
       `}</style>
-    </div>
+    </>
   );
 }
