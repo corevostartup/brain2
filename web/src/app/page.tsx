@@ -7,69 +7,101 @@ import BrainGraphView from "@/components/BrainGraphView";
 import SettingsView from "@/components/SettingsView";
 import { PanelLeftOpen } from "lucide-react";
 import {
-  loadDirectoryHandle,
-  verifyPermission,
-  buildGraphFromVault,
-  readFolderTree,
   type VaultGraph,
   type FolderTreeNode,
 } from "@/lib/vault";
+
+type PresetVaultResponse = {
+  path: string;
+  folders: FolderTreeNode[];
+  graph: VaultGraph;
+};
+
+type NativeVaultPayload = {
+  path?: string;
+  folders?: FolderTreeNode[];
+  graph?: VaultGraph | null;
+};
 
 export default function Home() {
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isYourBrainOpen, setIsYourBrainOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [vaultHandle, setVaultHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const [vaultGraph, setVaultGraph] = useState<VaultGraph | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
   const [vaultFolders, setVaultFolders] = useState<FolderTreeNode[]>([]);
+  const [vaultPath, setVaultPath] = useState("");
+  const [hasNativeVaultData, setHasNativeVaultData] = useState(false);
 
   const activeView = isSettingsOpen ? "settings" : isYourBrainOpen ? "brain" : "home";
 
-  // Restore vault handle from IndexedDB on mount
-  useEffect(() => {
-    (async () => {
-      const stored = await loadDirectoryHandle();
-      if (stored) {
-        const ok = await verifyPermission(stored);
-        if (ok) {
-          setVaultHandle(stored);
-          readFolderTree(stored).then(setVaultFolders).catch(() => {});
-        }
-      }
-    })();
-  }, []);
+  const loadPresetVaultData = useCallback(async (options?: { force?: boolean }) => {
+    if (hasNativeVaultData && !options?.force) {
+      return;
+    }
 
-  const loadVaultGraph = useCallback(async (handle: FileSystemDirectoryHandle) => {
     setGraphLoading(true);
     try {
-      const graph = await buildGraphFromVault(handle);
-      setVaultGraph(graph);
+      const response = await fetch("/api/vault", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("Falha ao carregar vault preset");
+      }
+      const data = (await response.json()) as PresetVaultResponse;
+      setVaultPath(data.path ?? "");
+      setVaultFolders(data.folders ?? []);
+      setVaultGraph(data.graph ?? null);
     } catch {
+      setVaultPath("");
+      setVaultFolders([]);
       setVaultGraph(null);
     }
     setGraphLoading(false);
+  }, [hasNativeVaultData]);
+
+  useEffect(() => {
+    void loadPresetVaultData();
+  }, [loadPresetVaultData]);
+
+  useEffect(() => {
+    const applyNativePayload = (payload?: NativeVaultPayload) => {
+      if (!payload) return;
+      setHasNativeVaultData(true);
+      setVaultPath(payload.path ?? "");
+      setVaultFolders(payload.folders ?? []);
+      setVaultGraph(payload.graph ?? null);
+    };
+
+    const handleNativeVaultSelection = (event: Event) => {
+      const customEvent = event as CustomEvent<NativeVaultPayload>;
+      applyNativePayload(customEvent.detail);
+    };
+
+    window.addEventListener("brain2-native-vault-selected", handleNativeVaultSelection);
+
+    const nativeState = (window as Window & { Brain2NativeState?: NativeVaultPayload }).Brain2NativeState;
+    if (nativeState) {
+      applyNativePayload(nativeState);
+    }
+
+    return () => {
+      window.removeEventListener("brain2-native-vault-selected", handleNativeVaultSelection);
+    };
   }, []);
 
   // When opening brain view, build graph from vault
   const handleOpenBrain = useCallback(async () => {
     setIsSettingsOpen(false);
     setIsYourBrainOpen(true);
-    if (vaultHandle) {
-      await loadVaultGraph(vaultHandle);
+    if (!hasNativeVaultData) {
+      await loadPresetVaultData();
     }
-  }, [vaultHandle, loadVaultGraph]);
+  }, [hasNativeVaultData, loadPresetVaultData]);
 
-  const handleVaultChange = useCallback((handle: FileSystemDirectoryHandle | null) => {
-    setVaultHandle(handle);
-    if (!handle) {
-      setVaultGraph(null);
-      setVaultFolders([]);
-    } else {
-      readFolderTree(handle).then(setVaultFolders).catch(() => {});
-    }
-  }, []);
+  const handleVaultChange = useCallback(() => {
+    setHasNativeVaultData(false);
+    void loadPresetVaultData({ force: true });
+  }, [loadPresetVaultData]);
 
   return (
     <main
@@ -162,7 +194,8 @@ export default function Home() {
           <SettingsView
             onClose={() => setIsSettingsOpen(false)}
             onVaultChange={handleVaultChange}
-            vaultHandle={vaultHandle}
+            vaultHandle={null}
+            nativeVaultPath={vaultPath}
           />
         ) : (
           <>

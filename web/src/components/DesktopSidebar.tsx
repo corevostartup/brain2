@@ -1,8 +1,6 @@
 "use client";
 
-import { useState } from "react";
 import {
-  ChevronRight,
   Folder,
   FolderOpen,
   MessageSquare,
@@ -14,25 +12,6 @@ import {
 } from "lucide-react";
 import type { FolderTreeNode } from "@/lib/vault";
 
-const folders = [
-  {
-    name: "Projetos",
-    children: ["Brain2", "Pesquisa"] as string[],
-  },
-  {
-    name: "Pessoal",
-    children: [] as string[],
-  },
-  {
-    name: "Clientes",
-    children: [] as string[],
-  },
-  {
-    name: "Arquivo",
-    children: [] as string[],
-  },
-];
-
 const conversations = [
   "Roadmap do produto",
   "Resumo da reunião",
@@ -41,49 +20,20 @@ const conversations = [
   "Checklist de lançamento",
 ];
 
-/* ── Recursive folder row ── */
-function FolderRow({ node, depth = 0 }: { node: FolderTreeNode; depth?: number }) {
-  const [open, setOpen] = useState(false);
-  const hasChildren = node.children.length > 0;
+type ClassicFolder = {
+  name: string;
+  children: string[];
+};
 
-  return (
-    <li>
-      <button
-        className="list-item"
-        type="button"
-        style={{ paddingLeft: `${8 + depth * 14}px` }}
-        onClick={() => hasChildren && setOpen((o) => !o)}
-      >
-        {hasChildren ? (
-          <ChevronRight
-            size={11}
-            strokeWidth={2}
-            style={{
-              transition: "transform 0.15s ease",
-              transform: open ? "rotate(90deg)" : "rotate(0deg)",
-              flexShrink: 0,
-            }}
-          />
-        ) : (
-          <span style={{ width: 11, flexShrink: 0 }} />
-        )}
-        {open ? (
-          <FolderOpen size={13} strokeWidth={1.8} />
-        ) : (
-          <Folder size={13} strokeWidth={1.8} />
-        )}
-        <span>{node.name}</span>
-      </button>
-
-      {open && hasChildren && (
-        <ul className="item-list">
-          {node.children.map((child) => (
-            <FolderRow key={child.name} node={child} depth={depth + 1} />
-          ))}
-        </ul>
-      )}
-    </li>
-  );
+function toClassicFolders(nodes: FolderTreeNode[]): ClassicFolder[] {
+  return nodes
+    .filter((node) => node.kind === "folder")
+    .map((node) => ({
+      name: node.name,
+      children: node.children
+        .filter((child) => child.kind === "folder")
+        .map((child) => child.name),
+    }));
 }
 
 type DesktopSidebarProps = {
@@ -95,6 +45,8 @@ type DesktopSidebarProps = {
 };
 
 export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobileFullscreen = false, vaultFolders = [] }: DesktopSidebarProps) {
+  const folders = toClassicFolders(vaultFolders);
+
   return (
     <aside
       className={`desktop-sidebar${mobileFullscreen ? " desktop-sidebar--mobile" : ""}`}
@@ -127,11 +79,8 @@ export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobile
         <section className="section-block folders-section" aria-label="Pastas">
           <p className="section-title">Pastas</p>
           <ul className="item-list folder-tree">
-            {vaultFolders.length > 0
-              ? vaultFolders.map((node) => (
-                  <FolderRow key={node.name} node={node} />
-                ))
-              : folders.map((folder) => (
+            {folders.length > 0
+              ? folders.map((folder) => (
                   <li key={folder.name}>
                     <button className="list-item" type="button">
                       <Folder size={13} strokeWidth={1.8} />
@@ -140,7 +89,7 @@ export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobile
                     {folder.children.length > 0 && (
                       <ul className="sub-list">
                         {folder.children.map((child) => (
-                          <li key={child}>
+                          <li key={`${folder.name}-${child}`}>
                             <button className="list-item sub-item" type="button">
                               <FolderOpen size={12} strokeWidth={1.8} />
                               <span>{child}</span>
@@ -150,7 +99,12 @@ export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobile
                       </ul>
                     )}
                   </li>
-                ))}
+                ))
+              : (
+                <li>
+                  <span className="vault-empty-hint">Nenhuma pasta encontrada</span>
+                </li>
+              )}
           </ul>
         </section>
 
@@ -357,6 +311,13 @@ export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobile
         .folder-tree::-webkit-scrollbar-thumb {
           background: rgba(255, 255, 255, 0.08);
           border-radius: 4px;
+        }
+
+        .vault-empty-hint {
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          color: #555;
+          padding: 4px 8px;
         }
 
         .section-title {

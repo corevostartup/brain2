@@ -115,30 +115,35 @@ export async function verifyPermission(
 
 export type FolderTreeNode = {
   name: string;
+  kind: "folder" | "file";
   children: FolderTreeNode[];
 };
 
-// ── Read folder tree (directories only) from a directory handle ──
+// ── Read folder tree (directories + .md files) from a directory handle ──
 
 export async function readFolderTree(
   dirHandle: FileSystemDirectoryHandle
 ): Promise<FolderTreeNode[]> {
   const folders: FolderTreeNode[] = [];
+  const files: FolderTreeNode[] = [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for await (const entry of (dirHandle as any).values() as AsyncIterable<FileSystemHandle>) {
     if (entry.kind === "directory" && !entry.name.startsWith(".")) {
       try {
         const children = await readFolderTree(entry as FileSystemDirectoryHandle);
-        folders.push({ name: entry.name, children });
+        folders.push({ name: entry.name, kind: "folder", children });
       } catch {
-        folders.push({ name: entry.name, children: [] });
+        folders.push({ name: entry.name, kind: "folder", children: [] });
       }
+    } else if (entry.kind === "file" && entry.name.endsWith(".md")) {
+      files.push({ name: entry.name.replace(/\.md$/, ""), kind: "file", children: [] });
     }
   }
 
   folders.sort((a, b) => a.name.localeCompare(b.name));
-  return folders;
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  return [...folders, ...files];
 }
 
 // ── Read all .md files recursively from a directory handle ──

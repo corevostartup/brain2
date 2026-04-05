@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { X, FolderOpen, Check, Trash2 } from "lucide-react";
 import {
   pickDirectory,
@@ -14,43 +14,73 @@ type SettingsViewProps = {
   onClose: () => void;
   onVaultChange: (handle: FileSystemDirectoryHandle | null) => void;
   vaultHandle: FileSystemDirectoryHandle | null;
+  nativeVaultPath?: string;
 };
 
-export default function SettingsView({ onClose, onVaultChange, vaultHandle }: SettingsViewProps) {
-  const [vaultPath, setVaultPath] = useState<string>("");
+type NativeBridge = {
+  isAvailable?: boolean;
+  pickDirectory?: () => void;
+};
+
+export default function SettingsView({ onClose, onVaultChange, vaultHandle, nativeVaultPath }: SettingsViewProps) {
+  const [vaultPath, setVaultPath] = useState<string>(() => (
+    typeof window === "undefined" ? "" : (loadVaultPath() ?? "")
+  ));
   const [status, setStatus] = useState<"idle" | "saved" | "error">("idle");
   const [pasteSaved, setPasteSaved] = useState(false);
+  const [nativePickerAvailable, setNativePickerAvailable] = useState(false);
+  const pendingHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
 
   useEffect(() => {
-    // Load saved path from localStorage
-    const stored = loadVaultPath();
-    if (stored) {
-      setVaultPath(stored);
-    } else if (vaultHandle) {
-      setVaultPath(vaultHandle.name);
-    }
+    pendingHandleRef.current = vaultHandle;
   }, [vaultHandle]);
 
+  useEffect(() => {
+    const detectBridge = () => {
+      const bridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
+      setNativePickerAvailable(Boolean(bridge?.pickDirectory));
+    };
+
+    detectBridge();
+    window.addEventListener("brain2-native-bridge-ready", detectBridge);
+
+    return () => {
+      window.removeEventListener("brain2-native-bridge-ready", detectBridge);
+    };
+  }, []);
+
   const handlePickDirectory = async () => {
+    const nativeBridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
+    if (nativeBridge?.pickDirectory) {
+      nativeBridge.pickDirectory();
+      setStatus("idle");
+      return;
+    }
+
     const handle = await pickDirectory();
     if (!handle) return;
 
-    await saveDirectoryHandle(handle);
-    // resolve() to get full path is not available in browsers,
-    // so we save the handle.name + let user see/edit the path
-    const path = handle.name;
-    saveVaultPath(path);
-    setVaultPath(path);
-    onVaultChange(handle);
-    setStatus("saved");
-    setTimeout(() => setStatus("idle"), 2000);
+    // Selecting does not apply immediately; user confirms via Save button.
+    pendingHandleRef.current = handle;
+    setVaultPath(handle.name);
+    setPasteSaved(false);
+    setStatus("idle");
   };
 
   const handleRemoveVault = async () => {
+    if (nativePickerAvailable) {
+      setVaultPath("");
+      setStatus("idle");
+      setPasteSaved(false);
+      return;
+    }
+
     await clearDirectoryHandle();
     setVaultPath("");
+    pendingHandleRef.current = null;
     onVaultChange(null);
     setStatus("idle");
+    setPasteSaved(false);
   };
 
   const handlePathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -60,9 +90,21 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
 
   const handlePasteSave = async () => {
     if (!vaultPath.trim()) return;
+    const handleToSave = pendingHandleRef.current ?? vaultHandle;
     saveVaultPath(vaultPath.trim());
+    if (!handleToSave) {
+      setStatus("error");
+      return;
+    }
+    await saveDirectoryHandle(handleToSave);
+    onVaultChange(handleToSave);
     setPasteSaved(true);
+    setStatus("saved");
+    setTimeout(() => setStatus("idle"), 2000);
   };
+
+  const displayedVaultPath = nativeVaultPath?.trim() || (vaultHandle ? vaultHandle.name : vaultPath);
+  const hasVaultSelection = Boolean(displayedVaultPath.trim());
 
   return (
     <div className="settings-root">
@@ -85,15 +127,25 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
             As conexões <code>{"[[wikilinks]]"}</code> serão usadas para gerar o grafo do Your Brain.
           </p>
 
-          {vaultHandle ? (
+          {nativePickerAvailable && (
+            <div className="native-picker-box">
+              <button className="native-picker-btn" onClick={handlePickDirectory}>
+                Escolher diretório via app Swift
+              </button>
+              <p className="native-picker-hint">
+                Usa o seletor nativo do macOS e atualiza Pastas e Your Brain automaticamente.
+              </p>
+            </div>
+          )}
+
+          {hasVaultSelection ? (
             <div className="vault-current">
               <div className="vault-current-info">
                 <FolderOpen size={14} strokeWidth={1.8} />
                 <input
                   className="vault-path-input"
                   type="text"
-                  value={vaultPath}
-                  onChange={handlePathChange}
+                  value={displayedVaultPath}
                   placeholder="Caminho do vault"
                   spellCheck={false}
                   readOnly
@@ -112,28 +164,30 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
                 >
                   Alterar
                 </button>
-                <button
-                  className="vault-remove-btn"
-                  onClick={handleRemoveVault}
-                  aria-label="Remover vault"
-                >
-                  <Trash2 size={13} strokeWidth={1.8} />
-                </button>
+                {!nativePickerAvailable && (
+                  <button
+                    className="vault-remove-btn"
+                    onClick={handleRemoveVault}
+                    aria-label="Remover vault"
+                  >
+                    <Trash2 size={13} strokeWidth={1.8} />
+                  </button>
+                )}
               </div>
             </div>
           ) : (
             <div className="vault-empty">
-              <button
-                className="vault-pick-btn"
-                onClick={handlePickDirectory}
-              >
-                <FolderOpen size={14} strokeWidth={1.8} />
-                Escolher diretório do Vault
-              </button>
-              <div className="vault-or">ou cole o caminho abaixo</div>
               <div className="vault-paste-row">
                 <label className={`vault-paste-field${pasteSaved ? " vault-paste-field--saved" : ""}`}>
-                  <FolderOpen size={14} strokeWidth={1.8} />
+                  <button
+                    className="vault-folder-icon-btn"
+                    type="button"
+                    onClick={handlePickDirectory}
+                    aria-label="Escolher diretório"
+                    title="Escolher diretório"
+                  >
+                    <FolderOpen size={14} strokeWidth={1.8} />
+                  </button>
                   <input
                     type="text"
                     value={vaultPath}
@@ -161,6 +215,9 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
                   </button>
                 )}
               </div>
+              {status === "error" && (
+                <p className="vault-error-hint">Selecione um diretório no icone de pasta antes de salvar.</p>
+              )}
             </div>
           )}
 
@@ -227,6 +284,40 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
           gap: 12px;
         }
 
+        .native-picker-box {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          padding: 10px 12px;
+          border: 1px solid var(--bar-border);
+          border-radius: 10px;
+          background: rgba(255, 255, 255, 0.02);
+        }
+
+        .native-picker-btn {
+          height: 34px;
+          border: 1px solid var(--bar-border);
+          border-radius: 9px;
+          background: rgba(255, 255, 255, 0.04);
+          color: var(--foreground);
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          font-weight: 500;
+          transition: background 0.15s ease, border-color 0.15s ease;
+        }
+
+        .native-picker-btn:hover {
+          background: var(--pill-active);
+          border-color: var(--bar-border-hover);
+        }
+
+        .native-picker-hint {
+          margin: 0;
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          color: var(--muted);
+        }
+
         .settings-section h3 {
           margin: 0;
           font-family: 'Inter', sans-serif;
@@ -251,27 +342,6 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
           border-radius: 4px;
           font-size: 11px;
           color: var(--muted-hover);
-        }
-
-        .vault-pick-btn {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          height: 40px;
-          padding: 0 16px;
-          border: 1px dashed var(--bar-border);
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.02);
-          color: var(--foreground);
-          font-family: 'Inter', sans-serif;
-          font-size: 12px;
-          font-weight: 500;
-          transition: background 0.15s ease, border-color 0.15s ease;
-        }
-
-        .vault-pick-btn:hover {
-          background: var(--pill-active);
-          border-color: var(--bar-border-hover);
         }
 
         .vault-current {
@@ -373,14 +443,6 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
           gap: 10px;
         }
 
-        .vault-or {
-          font-family: 'Inter', sans-serif;
-          font-size: 11px;
-          color: #444;
-          text-align: center;
-          letter-spacing: 0.04em;
-        }
-
         .vault-paste-row {
           display: flex;
           align-items: center;
@@ -391,12 +453,12 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
           flex: 1;
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 0;
           height: 40px;
           border-radius: 10px;
           border: 1px solid var(--bar-border);
           background: rgba(255, 255, 255, 0.02);
-          padding: 0 12px;
+          padding: 0 12px 0 0;
           color: var(--muted);
           transition: border-color 0.15s ease, opacity 0.3s ease;
         }
@@ -407,6 +469,26 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
 
         .vault-paste-field:focus-within {
           border-color: var(--bar-border-hover);
+        }
+
+        .vault-folder-icon-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 36px;
+          height: 38px;
+          border: none;
+          border-radius: 9px 0 0 9px;
+          background: transparent;
+          color: var(--muted);
+          flex-shrink: 0;
+          cursor: pointer;
+          transition: background 0.15s ease, color 0.15s ease;
+        }
+
+        .vault-folder-icon-btn:hover {
+          background: var(--pill-active);
+          color: var(--foreground);
         }
 
         .vault-paste-field input {
@@ -467,6 +549,13 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle }: Se
 
         .vault-paste-saved-btn:hover {
           background: rgba(72, 191, 132, 0.06);
+        }
+
+        .vault-error-hint {
+          margin: 0;
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          color: #c67878;
         }
 
         .vault-hint {
