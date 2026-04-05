@@ -15,6 +15,14 @@ export type VaultGraph = {
   edges: VaultEdge[];
 };
 
+export type VaultConversation = {
+  id: string;
+  title: string;
+  path: string;
+  modifiedAt: number;
+  content: string;
+};
+
 const DB_NAME = "brain2-vault";
 const STORE_NAME = "handles";
 const HANDLE_KEY = "vaultDirHandle";

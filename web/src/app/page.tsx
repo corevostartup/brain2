@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import InputBar from "@/components/InputBar";
 import DesktopSidebar from "@/components/DesktopSidebar";
 import BrainGraphView from "@/components/BrainGraphView";
+import ConversationView from "@/components/ConversationView";
 import SettingsView from "@/components/SettingsView";
 import { PanelLeftOpen } from "lucide-react";
 import {
+  type VaultConversation,
   type VaultGraph,
   type FolderTreeNode,
 } from "@/lib/vault";
@@ -15,12 +17,14 @@ type PresetVaultResponse = {
   path: string;
   folders: FolderTreeNode[];
   graph: VaultGraph;
+  conversations: VaultConversation[];
 };
 
 type NativeVaultPayload = {
   path?: string;
   folders?: FolderTreeNode[];
   graph?: VaultGraph | null;
+  conversations?: VaultConversation[];
 };
 
 export default function Home() {
@@ -31,10 +35,25 @@ export default function Home() {
   const [vaultGraph, setVaultGraph] = useState<VaultGraph | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
   const [vaultFolders, setVaultFolders] = useState<FolderTreeNode[]>([]);
+  const [vaultConversations, setVaultConversations] = useState<VaultConversation[]>([]);
   const [vaultPath, setVaultPath] = useState("");
+  const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [returnToYourBrainOnConversationClose, setReturnToYourBrainOnConversationClose] = useState(false);
   const [hasNativeVaultData, setHasNativeVaultData] = useState(false);
 
-  const activeView = isSettingsOpen ? "settings" : isYourBrainOpen ? "brain" : "home";
+  const selectedConversation = useMemo(
+    () => vaultConversations.find((conversation) => conversation.id === selectedConversationId) ?? null,
+    [selectedConversationId, vaultConversations]
+  );
+
+  const activeView = isSettingsOpen
+    ? "settings"
+    : isYourBrainOpen
+      ? "brain"
+      : selectedConversation
+        ? "conversation"
+        : "home";
 
   const loadPresetVaultData = useCallback(async (options?: { force?: boolean }) => {
     if (hasNativeVaultData && !options?.force) {
@@ -51,10 +70,15 @@ export default function Home() {
       setVaultPath(data.path ?? "");
       setVaultFolders(data.folders ?? []);
       setVaultGraph(data.graph ?? null);
+      setVaultConversations(data.conversations ?? []);
+      setSelectedFolderPath(null);
     } catch {
       setVaultPath("");
       setVaultFolders([]);
       setVaultGraph(null);
+      setVaultConversations([]);
+      setSelectedFolderPath(null);
+      setSelectedConversationId(null);
     }
     setGraphLoading(false);
   }, [hasNativeVaultData]);
@@ -70,6 +94,8 @@ export default function Home() {
       setVaultPath(payload.path ?? "");
       setVaultFolders(payload.folders ?? []);
       setVaultGraph(payload.graph ?? null);
+      setVaultConversations(payload.conversations ?? []);
+      setSelectedFolderPath(null);
     };
 
     const handleNativeVaultSelection = (event: Event) => {
@@ -89,6 +115,12 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (selectedConversationId && !selectedConversation) {
+      setSelectedConversationId(null);
+    }
+  }, [selectedConversationId, selectedConversation]);
+
   // When opening brain view, build graph from vault
   const handleOpenBrain = useCallback(async () => {
     setIsSettingsOpen(false);
@@ -102,6 +134,38 @@ export default function Home() {
     setHasNativeVaultData(false);
     void loadPresetVaultData({ force: true });
   }, [loadPresetVaultData]);
+
+  const handleConversationSelect = useCallback((
+    conversation: VaultConversation,
+    options?: { fromYourBrain?: boolean }
+  ) => {
+    setIsSettingsOpen(false);
+    setIsYourBrainOpen(false);
+    setSelectedConversationId(conversation.id);
+    setReturnToYourBrainOnConversationClose(Boolean(options?.fromYourBrain));
+  }, []);
+
+  const handleOpenConversationFromNode = useCallback((nodeId: string, nodeLabel: string) => {
+    const normalizedNodeId = nodeId.trim().toLowerCase();
+    const normalizedNodeLabel = nodeLabel.trim().toLowerCase();
+
+    const match = vaultConversations.find((conversation) => {
+      const normalizedTitle = conversation.title.trim().toLowerCase();
+      return normalizedTitle === normalizedNodeId || normalizedTitle === normalizedNodeLabel;
+    });
+
+    if (match) {
+      handleConversationSelect(match, { fromYourBrain: true });
+    }
+  }, [vaultConversations, handleConversationSelect]);
+
+  const handleCloseConversation = useCallback(() => {
+    setSelectedConversationId(null);
+    if (returnToYourBrainOnConversationClose) {
+      setIsYourBrainOpen(true);
+    }
+    setReturnToYourBrainOnConversationClose(false);
+  }, [returnToYourBrainOnConversationClose]);
 
   return (
     <main
@@ -125,6 +189,11 @@ export default function Home() {
           onYourBrain={handleOpenBrain}
           onSettings={() => { setIsYourBrainOpen(false); setIsSettingsOpen(true); }}
           vaultFolders={vaultFolders}
+          vaultConversations={vaultConversations}
+          selectedFolderPath={selectedFolderPath}
+          onFolderSelect={setSelectedFolderPath}
+          selectedConversationId={selectedConversationId}
+          onConversationSelect={handleConversationSelect}
         />
       )}
 
@@ -142,6 +211,14 @@ export default function Home() {
           }}
           mobileFullscreen
           vaultFolders={vaultFolders}
+          vaultConversations={vaultConversations}
+          selectedFolderPath={selectedFolderPath}
+          onFolderSelect={setSelectedFolderPath}
+          selectedConversationId={selectedConversationId}
+          onConversationSelect={(conversation) => {
+            setIsMobileSidebarOpen(false);
+            handleConversationSelect(conversation);
+          }}
         />
       )}
 
@@ -189,6 +266,12 @@ export default function Home() {
             onClose={() => setIsYourBrainOpen(false)}
             graph={vaultGraph}
             loading={graphLoading}
+            onOpenConversationFromNode={handleOpenConversationFromNode}
+          />
+        ) : activeView === "conversation" && selectedConversation ? (
+          <ConversationView
+            conversation={selectedConversation}
+            onClose={handleCloseConversation}
           />
         ) : activeView === "settings" ? (
           <SettingsView
@@ -230,7 +313,7 @@ export default function Home() {
       </section>
 
       {/* Bottom input bar */}
-      {!isMobileSidebarOpen && activeView === "home" && (
+      {!isMobileSidebarOpen && (activeView === "home" || activeView === "conversation") && (
         <InputBar desktopSidebarOffset={!isSidebarHidden} />
       )}
 

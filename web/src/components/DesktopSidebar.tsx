@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import {
   Folder,
   FolderOpen,
@@ -10,30 +11,42 @@ import {
   Settings,
   Sparkles,
 } from "lucide-react";
-import type { FolderTreeNode } from "@/lib/vault";
+import type { FolderTreeNode, VaultConversation } from "@/lib/vault";
 
-const conversations = [
-  "Roadmap do produto",
-  "Resumo da reunião",
-  "Ideias para onboarding",
-  "Prompt de análise",
-  "Checklist de lançamento",
-];
-
-type ClassicFolder = {
+type FolderRow = {
   name: string;
-  children: string[];
+  path: string;
+  depth: number;
 };
 
-function toClassicFolders(nodes: FolderTreeNode[]): ClassicFolder[] {
-  return nodes
-    .filter((node) => node.kind === "folder")
-    .map((node) => ({
-      name: node.name,
-      children: node.children
-        .filter((child) => child.kind === "folder")
-        .map((child) => child.name),
-    }));
+function collectFolderRows(
+  nodes: FolderTreeNode[],
+  parentPath = "",
+  depth = 0
+): FolderRow[] {
+  const rows: FolderRow[] = [];
+
+  for (const node of nodes) {
+    if (node.kind !== "folder") {
+      continue;
+    }
+
+    const rowPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+    rows.push({ name: node.name, path: rowPath, depth });
+    rows.push(...collectFolderRows(node.children, rowPath, depth + 1));
+  }
+
+  return rows;
+}
+
+function formatModifiedDate(timestamp: number): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
 }
 
 type DesktopSidebarProps = {
@@ -42,10 +55,37 @@ type DesktopSidebarProps = {
   onSettings?: () => void;
   mobileFullscreen?: boolean;
   vaultFolders?: FolderTreeNode[];
+  vaultConversations?: VaultConversation[];
+  selectedFolderPath?: string | null;
+  onFolderSelect?: (path: string | null) => void;
+  selectedConversationId?: string | null;
+  onConversationSelect?: (conversation: VaultConversation) => void;
 };
 
-export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobileFullscreen = false, vaultFolders = [] }: DesktopSidebarProps) {
-  const folders = toClassicFolders(vaultFolders);
+export default function DesktopSidebar({
+  onHide,
+  onYourBrain,
+  onSettings,
+  mobileFullscreen = false,
+  vaultFolders = [],
+  vaultConversations = [],
+  selectedFolderPath = null,
+  onFolderSelect,
+  selectedConversationId = null,
+  onConversationSelect,
+}: DesktopSidebarProps) {
+  const folderRows = useMemo(() => collectFolderRows(vaultFolders), [vaultFolders]);
+  const filteredConversations = useMemo(() => {
+    const scoped = selectedFolderPath
+      ? vaultConversations.filter(
+          (conversation) =>
+            conversation.path === selectedFolderPath ||
+            conversation.path.startsWith(`${selectedFolderPath}/`)
+        )
+      : vaultConversations;
+
+    return [...scoped].sort((a, b) => b.modifiedAt - a.modifiedAt);
+  }, [selectedFolderPath, vaultConversations]);
 
   return (
     <aside
@@ -79,27 +119,40 @@ export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobile
         <section className="section-block folders-section" aria-label="Pastas">
           <p className="section-title">Pastas</p>
           <ul className="item-list folder-tree">
-            {folders.length > 0
-              ? folders.map((folder) => (
-                  <li key={folder.name}>
-                    <button className="list-item" type="button">
-                      <Folder size={13} strokeWidth={1.8} />
-                      <span>{folder.name}</span>
+            {folderRows.length > 0
+              ? (
+                <>
+                  <li>
+                    <button
+                      className={`list-item${selectedFolderPath === null ? " list-item--active" : ""}`}
+                      type="button"
+                      onClick={() => onFolderSelect?.(null)}
+                      aria-pressed={selectedFolderPath === null}
+                    >
+                      <FolderOpen size={12} strokeWidth={1.8} />
+                      <span>Todas as pastas</span>
                     </button>
-                    {folder.children.length > 0 && (
-                      <ul className="sub-list">
-                        {folder.children.map((child) => (
-                          <li key={`${folder.name}-${child}`}>
-                            <button className="list-item sub-item" type="button">
-                              <FolderOpen size={12} strokeWidth={1.8} />
-                              <span>{child}</span>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
                   </li>
-                ))
+                  {folderRows.map((folder) => (
+                    <li key={folder.path}>
+                      <button
+                        className={`list-item${selectedFolderPath === folder.path ? " list-item--active" : ""}`}
+                        type="button"
+                        style={{ paddingLeft: `${8 + folder.depth * 12}px` }}
+                        onClick={() => onFolderSelect?.(folder.path)}
+                        aria-pressed={selectedFolderPath === folder.path}
+                      >
+                        {folder.depth === 0 ? (
+                          <Folder size={13} strokeWidth={1.8} />
+                        ) : (
+                          <FolderOpen size={12} strokeWidth={1.8} />
+                        )}
+                        <span>{folder.name}</span>
+                      </button>
+                    </li>
+                  ))}
+                </>
+              )
               : (
                 <li>
                   <span className="vault-empty-hint">Nenhuma pasta encontrada</span>
@@ -108,17 +161,35 @@ export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobile
           </ul>
         </section>
 
-        <section className="section-block" aria-label="Todas as conversas">
+        <section className="section-block conversations-section" aria-label="Todas as conversas">
           <p className="section-title">Todas as conversas</p>
-          <ul className="item-list">
-            {conversations.map((chat) => (
-              <li key={chat}>
-                <button className="list-item" type="button">
+          <p className="section-subtitle">
+            {selectedFolderPath
+              ? `${filteredConversations.length} arquivos .md em ${selectedFolderPath}`
+              : `${filteredConversations.length} arquivos .md no vault`}
+          </p>
+          <ul className="item-list conversation-list">
+            {filteredConversations.length > 0
+              ? filteredConversations.map((conversation) => (
+              <li key={conversation.id}>
+                <button
+                  className={`list-item conversation-item${selectedConversationId === conversation.id ? " conversation-item--active" : ""}`}
+                  type="button"
+                  title={conversation.path}
+                  onClick={() => onConversationSelect?.(conversation)}
+                  aria-pressed={selectedConversationId === conversation.id}
+                >
                   <MessageSquare size={13} strokeWidth={1.8} />
-                  <span>{chat}</span>
+                  <span>{conversation.title}</span>
+                  <small className="conversation-meta">{formatModifiedDate(conversation.modifiedAt)}</small>
                 </button>
               </li>
-            ))}
+            ))
+              : (
+                <li>
+                  <span className="vault-empty-hint">Nenhum arquivo .md encontrado para esta pasta.</span>
+                </li>
+              )}
           </ul>
         </section>
 
@@ -330,6 +401,13 @@ export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobile
           font-weight: 500;
         }
 
+        .section-subtitle {
+          margin: 0;
+          font-family: 'Inter', sans-serif;
+          font-size: 10px;
+          color: #595959;
+        }
+
         .item-list,
         .sub-list {
           list-style: none;
@@ -361,12 +439,55 @@ export default function DesktopSidebar({ onHide, onYourBrain, onSettings, mobile
           color: var(--muted-hover);
         }
 
+        .list-item--active {
+          background: var(--pill-bg);
+          color: var(--muted-hover);
+        }
+
         .sub-list {
           margin-left: 12px;
         }
 
         .sub-item {
           color: #6d6d6d;
+        }
+
+        .conversations-section {
+          min-height: 160px;
+          overflow: hidden;
+        }
+
+        .conversation-list {
+          overflow-y: auto;
+          max-height: 180px;
+        }
+
+        .conversation-item {
+          justify-content: space-between;
+        }
+
+        .conversation-item--active {
+          background: rgba(255, 255, 255, 0.1);
+          color: #f1f1f1;
+        }
+
+        .conversation-item--active .conversation-meta {
+          color: #8b8b8b;
+        }
+
+        .conversation-item span {
+          flex: 1;
+          min-width: 0;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .conversation-meta {
+          color: #666;
+          font-size: 10px;
+          margin-left: 8px;
+          white-space: nowrap;
         }
 
         .promo-card {

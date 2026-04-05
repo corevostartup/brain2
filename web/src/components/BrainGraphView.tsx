@@ -9,13 +9,30 @@ import type { VaultGraph } from "@/lib/vault";
 const FORCE_CFG = {
   repulsion: 6000,      // Coulomb repulsion strength
   attraction: 0.012,    // Spring attraction along edges
+  baseIdealLength: 95,
+  degreeIdealBoost: 22,
+  degreeMismatchLengthBoost: 3.2,
+  springStretchCap: 240,
   gravity: 0.04,        // Pull toward center
   damping: 0.82,        // Velocity damping per frame
   minVelocity: 0.02,    // Below this, node is "at rest"
   maxVelocity: 20,      // Cap velocity per frame
   cooldownTicks: 600,   // Auto-stop after N idle ticks
   dragBoost: 3.0,       // Extra attraction multiplier during drag
+  dragImpulse: 0.75,    // Velocity impulse from dragged node to neighbors
+  dragPropagationDepth: 4,
+  dragPropagationDecay: 0.62,
+  dragPositionCarry: 0.42,
+  dragNeighborSpring: 0.095,
+  dragVelocitySmoothing: 0.28,
+  dragMomentumScale: 14,
+  dragReleaseBoost: 1.8,
+  dragReleaseMaxImpulse: 6.5,
 };
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
 
 // ── Mock data: interconnected notes/files ──────────────────────────────
 const mockNodes = [
@@ -131,19 +148,113 @@ type BrainGraphViewProps = {
   onClose: () => void;
   graph?: VaultGraph | null;
   loading?: boolean;
+  onOpenConversationFromNode?: (nodeId: string, nodeLabel: string) => void;
 };
 
 // Single color for vault-sourced nodes
 const VAULT_NODE_COLOR = "#4ea8de";
 const VAULT_NODE_COLOR_DIM = "#264f6a";
 
-export default function BrainGraphView({ onClose, graph, loading }: BrainGraphViewProps) {
+export default function BrainGraphView({ onClose, graph, loading, onOpenConversationFromNode }: BrainGraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const rafRef = useRef<number>(0);
   const velocities = useRef<Record<string, { vx: number; vy: number }>>({});
   const grabbedNode = useRef<string | null>(null);
+  const dragLastPos = useRef<{ x: number; y: number } | null>(null);
+  const dragMomentum = useRef<{ vx: number; vy: number; ts: number } | null>(null);
+  const dragStartPos = useRef<{ x: number; y: number } | null>(null);
+  const suppressNodeTapUntil = useRef(0);
   const simulationActive = useRef(true);
+
+  const collectInfluencedNodes = useCallback((cy: Core, sourceId: string) => {
+    const visited = new Set<string>([sourceId]);
+    let frontier = [sourceId];
+    let depth = 1;
+
+    const influenced: Array<{ id: string; influence: number }> = [];
+
+    while (frontier.length > 0 && depth <= FORCE_CFG.dragPropagationDepth) {
+      const nextFrontier: string[] = [];
+
+      for (const id of frontier) {
+        const node = cy.getElementById(id);
+        if (node.empty()) continue;
+
+        node.connectedEdges().forEach((edge) => {
+          const neighborId = edge.source().id() === id ? edge.target().id() : edge.source().id();
+          if (visited.has(neighborId)) return;
+
+          visited.add(neighborId);
+          nextFrontier.push(neighborId);
+          influenced.push({
+            id: neighborId,
+            influence: FORCE_CFG.dragImpulse * Math.pow(FORCE_CFG.dragPropagationDecay, depth - 1),
+          });
+        });
+      }
+
+      frontier = nextFrontier;
+      depth += 1;
+    }
+
+    return influenced;
+  }, []);
+
+  const applyDragPropagation = useCallback((
+    cy: Core,
+    sourceId: string,
+    dx: number,
+    dy: number,
+    momentum: { vx: number; vy: number }
+  ) => {
+    const deltaMagnitude = Math.hypot(dx, dy);
+    if (!Number.isFinite(deltaMagnitude) || deltaMagnitude < 0.001) return;
+
+    const vels = velocities.current;
+    const influenced = collectInfluencedNodes(cy, sourceId);
+
+    if (influenced.length === 0) return;
+
+    const momentumX = momentum.vx * FORCE_CFG.dragMomentumScale;
+    const momentumY = momentum.vy * FORCE_CFG.dragMomentumScale;
+
+    cy.batch(() => {
+      for (const target of influenced) {
+        if (target.id === grabbedNode.current) continue;
+
+        const node = cy.getElementById(target.id);
+        if (node.empty()) continue;
+
+        const velocity = vels[target.id] ?? { vx: 0, vy: 0 };
+        velocity.vx += (dx + momentumX) * target.influence;
+        velocity.vy += (dy + momentumY) * target.influence;
+        vels[target.id] = velocity;
+
+        const position = node.position();
+        node.position({
+          x: position.x + dx * target.influence * FORCE_CFG.dragPositionCarry,
+          y: position.y + dy * target.influence * FORCE_CFG.dragPositionCarry,
+        });
+      }
+    });
+  }, [collectInfluencedNodes]);
+
+  const applyReleaseInertia = useCallback((cy: Core, sourceId: string, vx: number, vy: number) => {
+    const vels = velocities.current;
+    const influenced = collectInfluencedNodes(cy, sourceId);
+    if (influenced.length === 0) return;
+
+    const releaseVX = clamp(vx * FORCE_CFG.dragMomentumScale * FORCE_CFG.dragReleaseBoost, -FORCE_CFG.dragReleaseMaxImpulse, FORCE_CFG.dragReleaseMaxImpulse);
+    const releaseVY = clamp(vy * FORCE_CFG.dragMomentumScale * FORCE_CFG.dragReleaseBoost, -FORCE_CFG.dragReleaseMaxImpulse, FORCE_CFG.dragReleaseMaxImpulse);
+
+    for (const target of influenced) {
+      const velocity = vels[target.id] ?? { vx: 0, vy: 0 };
+      velocity.vx += releaseVX * target.influence;
+      velocity.vy += releaseVY * target.influence;
+      vels[target.id] = velocity;
+    }
+  }, [collectInfluencedNodes]);
 
   const runForceSimulation = useCallback((cy: Core) => {
     const nodes = cy.nodes();
@@ -181,8 +292,8 @@ export default function BrainGraphView({ onClose, graph, loading }: BrainGraphVi
         for (let j = i + 1; j < nodes.length; j++) {
           const a = nodes[i], b = nodes[j];
           const pa = posMap[a.id()], pb = posMap[b.id()];
-          let dx = pa.x - pb.x;
-          let dy = pa.y - pb.y;
+          const dx = pa.x - pb.x;
+          const dy = pa.y - pb.y;
           let dist = Math.sqrt(dx * dx + dy * dy) || 1;
           if (dist < 10) dist = 10;
           const f = FORCE_CFG.repulsion / (dist * dist);
@@ -208,12 +319,49 @@ export default function BrainGraphView({ onClose, graph, loading }: BrainGraphVi
         const dx = pb.x - pa.x;
         const dy = pb.y - pa.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const f = dist * attractionK;
+        const edgeWeight = Number(e.data("weight")) || 1;
+        const idealLength = Number(e.data("idealLength")) || FORCE_CFG.baseIdealLength;
+        const stretch = clamp(
+          dist - idealLength,
+          -FORCE_CFG.springStretchCap,
+          FORCE_CFG.springStretchCap
+        );
+        const f = stretch * attractionK * edgeWeight;
         forces[src].fx += (dx / dist) * f;
         forces[src].fy += (dy / dist) * f;
         forces[tgt].fx -= (dx / dist) * f;
         forces[tgt].fy -= (dy / dist) * f;
       });
+
+      // While dragging, pull first-order neighbors directly as springs from dragged node.
+      if (isDragging && grabbedNode.current) {
+        const draggedId = grabbedNode.current;
+        const draggedPos = posMap[draggedId];
+        const draggedNode = cy.getElementById(draggedId);
+
+        if (draggedPos && !draggedNode.empty()) {
+          draggedNode.connectedEdges().forEach((edge) => {
+            const neighborId = edge.source().id() === draggedId ? edge.target().id() : edge.source().id();
+            const neighborPos = posMap[neighborId];
+            if (!neighborPos || !forces[neighborId]) return;
+
+            const dx = draggedPos.x - neighborPos.x;
+            const dy = draggedPos.y - neighborPos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const idealLength = Number(edge.data("idealLength")) || FORCE_CFG.baseIdealLength;
+            const edgeWeight = Number(edge.data("weight")) || 1;
+            const stretch = clamp(
+              dist - idealLength,
+              -FORCE_CFG.springStretchCap,
+              FORCE_CFG.springStretchCap
+            );
+            const f = stretch * FORCE_CFG.dragNeighborSpring * edgeWeight;
+
+            forces[neighborId].fx += (dx / dist) * f;
+            forces[neighborId].fy += (dy / dist) * f;
+          });
+        }
+      }
 
       // Gravity toward center
       nodes.forEach((n) => {
@@ -306,6 +454,10 @@ export default function BrainGraphView({ onClose, graph, loading }: BrainGraphVi
       degreeMap[e.source] = (degreeMap[e.source] || 0) + 1;
       degreeMap[e.target] = (degreeMap[e.target] || 0) + 1;
     });
+    const groupMap: Record<string, string> = {};
+    activeNodes.forEach((n) => {
+      groupMap[n.id] = n.group;
+    });
 
     const elements = [
       ...activeNodes.map((n) => ({
@@ -316,13 +468,36 @@ export default function BrainGraphView({ onClose, graph, loading }: BrainGraphVi
           degree: degreeMap[n.id] || 1,
         },
       })),
-      ...activeEdges.map((e, i) => ({
-        data: {
-          id: `e${i}`,
-          source: e.source,
-          target: e.target,
-        },
-      })),
+      ...activeEdges.map((e, i) => {
+        const sourceDegree = degreeMap[e.source] || 1;
+        const targetDegree = degreeMap[e.target] || 1;
+        const avgDegree = (sourceDegree + targetDegree) / 2;
+        const degreeMismatch = Math.abs(sourceDegree - targetDegree);
+
+        const sameGroup = groupMap[e.source] === groupMap[e.target];
+
+        // Weigh links: stronger for local/low-degree pairs, softer for hub-heavy edges.
+        const lowDegreeBoost = 1 + 0.9 / (1 + avgDegree);
+        const hubDamping = 1 / (1 + Math.log1p(Math.max(sourceDegree, targetDegree)) * 0.42);
+        const groupAffinity = sameGroup ? 1.16 : 0.92;
+        const weight = clamp(groupAffinity * lowDegreeBoost * (0.72 + hubDamping), 0.35, 2.2);
+
+        // Adaptive ideal length by local topology to reduce central clumping.
+        const idealLength =
+          FORCE_CFG.baseIdealLength +
+          Math.log1p(avgDegree) * FORCE_CFG.degreeIdealBoost +
+          degreeMismatch * FORCE_CFG.degreeMismatchLengthBoost;
+
+        return {
+          data: {
+            id: `e${i}`,
+            source: e.source,
+            target: e.target,
+            weight,
+            idealLength,
+          },
+        };
+      }),
     ];
 
     const cy = cytoscape({
@@ -495,6 +670,10 @@ export default function BrainGraphView({ onClose, graph, loading }: BrainGraphVi
     cy.on("grab", "node", (evt: EventObject) => {
       const node = evt.target as NodeSingular;
       grabbedNode.current = node.id();
+      const startPos = node.position();
+      dragLastPos.current = { x: startPos.x, y: startPos.y };
+      dragStartPos.current = { x: startPos.x, y: startPos.y };
+      dragMomentum.current = { vx: 0, vy: 0, ts: performance.now() };
 
       // Dim unconnected elements
       const neighborhood = node.closedNeighborhood();
@@ -510,18 +689,65 @@ export default function BrainGraphView({ onClose, graph, loading }: BrainGraphVi
       containerRef.current!.style.cursor = "grabbing";
     });
 
-    cy.on("drag", "node", () => {
+    cy.on("drag", "node", (evt: EventObject) => {
+      const node = evt.target as NodeSingular;
+      const pos = node.position();
+      const last = dragLastPos.current;
+      const start = dragStartPos.current;
+
+      if (start) {
+        const movedDistance = Math.hypot(pos.x - start.x, pos.y - start.y);
+        if (movedDistance > 2.5) {
+          suppressNodeTapUntil.current = performance.now() + 220;
+        }
+      }
+
+      if (last) {
+        const dx = pos.x - last.x;
+        const dy = pos.y - last.y;
+        const now = performance.now();
+        const currentMomentum = dragMomentum.current ?? { vx: 0, vy: 0, ts: now };
+        const dt = Math.max(1, now - currentMomentum.ts);
+        const instantVX = dx / dt;
+        const instantVY = dy / dt;
+        const smooth = FORCE_CFG.dragVelocitySmoothing;
+        const blendedVX = currentMomentum.vx * (1 - smooth) + instantVX * smooth;
+        const blendedVY = currentMomentum.vy * (1 - smooth) + instantVY * smooth;
+        dragMomentum.current = { vx: blendedVX, vy: blendedVY, ts: now };
+
+        applyDragPropagation(cy, node.id(), dx, dy, { vx: blendedVX, vy: blendedVY });
+      }
+      dragLastPos.current = { x: pos.x, y: pos.y };
       wakeSimulation();
     });
 
-    cy.on("free", "node", () => {
+    cy.on("free", "node", (evt: EventObject) => {
+      const node = evt.target as NodeSingular;
+      const momentum = dragMomentum.current;
+      if (momentum) {
+        applyReleaseInertia(cy, node.id(), momentum.vx, momentum.vy);
+      }
+
       grabbedNode.current = null;
+      dragLastPos.current = null;
+      dragStartPos.current = null;
+      dragMomentum.current = null;
       cy.elements()
         .removeClass("grab-dimmed")
         .removeClass("grab-highlight")
         .removeClass("grab-connected");
       wakeSimulation();
       containerRef.current!.style.cursor = "grab";
+    });
+
+    cy.on("tap", "node", (evt: EventObject) => {
+      if (performance.now() < suppressNodeTapUntil.current) return;
+      if (!onOpenConversationFromNode) return;
+
+      const node = evt.target as NodeSingular;
+      const nodeId = node.id();
+      const nodeLabel = String(node.data("label") ?? nodeId);
+      onOpenConversationFromNode(nodeId, nodeLabel);
     });
 
     containerRef.current.style.cursor = "grab";
@@ -532,7 +758,15 @@ export default function BrainGraphView({ onClose, graph, loading }: BrainGraphVi
       velocities.current = {};
       runForceSimulation(cy);
     });
-  }, [runForceSimulation, wakeSimulation, activeNodes, activeEdges]);
+  }, [
+    runForceSimulation,
+    wakeSimulation,
+    applyDragPropagation,
+    applyReleaseInertia,
+    onOpenConversationFromNode,
+    activeNodes,
+    activeEdges,
+  ]);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => {

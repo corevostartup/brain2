@@ -164,12 +164,15 @@ struct WebView: NSViewRepresentable {
 
         private func buildVaultPayload(for rootURL: URL) -> [String: Any] {
             let folders = readFolderTree(at: rootURL)
-            let graph = buildGraph(at: rootURL)
+            let markdownFiles = readAllMarkdownFiles(at: rootURL)
+            let graph = buildGraph(from: markdownFiles)
+            let conversations = buildConversations(from: markdownFiles)
 
             return [
                 "path": rootURL.path,
                 "folders": folders.map(\.asJSONObject),
                 "graph": graph,
+                "conversations": conversations,
             ]
         }
 
@@ -225,7 +228,7 @@ struct WebView: NSViewRepresentable {
             return folders
         }
 
-        private func readAllMarkdownFiles(at directoryURL: URL) -> [MarkdownFile] {
+        private func readAllMarkdownFiles(at directoryURL: URL, basePath: String = "") -> [MarkdownFile] {
             guard
                 let entries = try? fileManager.contentsOfDirectory(
                     at: directoryURL,
@@ -243,18 +246,26 @@ struct WebView: NSViewRepresentable {
                     continue
                 }
 
+                let relativePath = basePath.isEmpty
+                    ? entry.lastPathComponent
+                    : "\(basePath)/\(entry.lastPathComponent)"
+
                 var isDirectory: ObjCBool = false
                 if fileManager.fileExists(atPath: entry.path, isDirectory: &isDirectory), isDirectory.boolValue {
-                    files.append(contentsOf: readAllMarkdownFiles(at: entry))
+                    files.append(contentsOf: readAllMarkdownFiles(at: entry, basePath: relativePath))
                     continue
                 }
 
                 if entry.pathExtension.lowercased() == "md" {
                     guard let content = try? String(contentsOf: entry, encoding: .utf8) else { continue }
+                    let resourceValues = try? entry.resourceValues(forKeys: [.contentModificationDateKey])
+                    let modifiedAt = (resourceValues?.contentModificationDate?.timeIntervalSince1970 ?? 0) * 1000
                     files.append(
                         MarkdownFile(
                             name: entry.deletingPathExtension().lastPathComponent,
-                            content: content
+                            path: relativePath,
+                            content: content,
+                            modifiedAt: modifiedAt
                         )
                     )
                 }
@@ -280,9 +291,7 @@ struct WebView: NSViewRepresentable {
             }
         }
 
-        private func buildGraph(at rootURL: URL) -> [String: Any] {
-            let files = readAllMarkdownFiles(at: rootURL)
-
+        private func buildGraph(from files: [MarkdownFile]) -> [String: Any] {
             var nodeMap: [String: String] = [:]
             for file in files {
                 nodeMap[file.name.lowercased()] = file.name
@@ -325,6 +334,20 @@ struct WebView: NSViewRepresentable {
                 "edges": edges,
             ]
         }
+
+        private func buildConversations(from files: [MarkdownFile]) -> [[String: Any]] {
+            files
+                .sorted(by: { $0.modifiedAt > $1.modifiedAt })
+                .map { file in
+                    [
+                        "id": file.path.lowercased(),
+                        "title": file.name,
+                        "path": file.path,
+                        "modifiedAt": file.modifiedAt,
+                        "content": file.content,
+                    ]
+                }
+        }
     }
 
     private struct NativeFolderNode {
@@ -342,7 +365,9 @@ struct WebView: NSViewRepresentable {
 
     private struct MarkdownFile {
         let name: String
+        let path: String
         let content: String
+        let modifiedAt: Double
     }
 }
 
