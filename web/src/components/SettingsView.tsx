@@ -49,6 +49,20 @@ export default function SettingsView({ onClose, onVaultChange, vaultHandle, nati
     };
   }, []);
 
+  useEffect(() => {
+    if (!nativePickerAvailable) return;
+
+    const handleNativeVaultSelected = () => {
+      setStatus("saved");
+      setTimeout(() => setStatus("idle"), 2000);
+    };
+
+    window.addEventListener("brain2-native-vault-selected", handleNativeVaultSelected);
+    return () => {
+      window.removeEventListener("brain2-native-vault-selected", handleNativeVaultSelected);
+    };
+  }, [nativePickerAvailable]);
+
   const handlePickDirectory = async () => {
     const nativeBridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
     if (nativeBridge?.pickDirectory) {

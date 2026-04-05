@@ -41,6 +41,7 @@ export default function Home() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [returnToYourBrainOnConversationClose, setReturnToYourBrainOnConversationClose] = useState(false);
   const [hasNativeVaultData, setHasNativeVaultData] = useState(false);
+  const [vaultDataVersion, setVaultDataVersion] = useState(0);
 
   const selectedConversation = useMemo(
     () => vaultConversations.find((conversation) => conversation.id === selectedConversationId) ?? null,
@@ -55,6 +56,27 @@ export default function Home() {
         ? "conversation"
         : "home";
 
+  const applyVaultData = useCallback((
+    data: {
+      path?: string;
+      folders?: FolderTreeNode[];
+      graph?: VaultGraph | null;
+      conversations?: VaultConversation[];
+    },
+    options?: { markAsNative?: boolean }
+  ) => {
+    setHasNativeVaultData(Boolean(options?.markAsNative));
+    setVaultPath(data.path ?? "");
+    setVaultFolders(data.folders ?? []);
+    setVaultGraph(data.graph ?? null);
+    setVaultConversations(data.conversations ?? []);
+    setSelectedFolderPath(null);
+    setSelectedConversationId(null);
+    setReturnToYourBrainOnConversationClose(false);
+    setGraphLoading(false);
+    setVaultDataVersion((value) => value + 1);
+  }, []);
+
   const loadPresetVaultData = useCallback(async (options?: { force?: boolean }) => {
     if (hasNativeVaultData && !options?.force) {
       return;
@@ -67,21 +89,27 @@ export default function Home() {
         throw new Error("Falha ao carregar vault preset");
       }
       const data = (await response.json()) as PresetVaultResponse;
-      setVaultPath(data.path ?? "");
-      setVaultFolders(data.folders ?? []);
-      setVaultGraph(data.graph ?? null);
-      setVaultConversations(data.conversations ?? []);
-      setSelectedFolderPath(null);
+      applyVaultData(
+        {
+          path: data.path,
+          folders: data.folders,
+          graph: data.graph,
+          conversations: data.conversations,
+        },
+        { markAsNative: false }
+      );
     } catch {
-      setVaultPath("");
-      setVaultFolders([]);
-      setVaultGraph(null);
-      setVaultConversations([]);
-      setSelectedFolderPath(null);
-      setSelectedConversationId(null);
+      applyVaultData(
+        {
+          path: "",
+          folders: [],
+          graph: null,
+          conversations: [],
+        },
+        { markAsNative: false }
+      );
     }
-    setGraphLoading(false);
-  }, [hasNativeVaultData]);
+  }, [hasNativeVaultData, applyVaultData]);
 
   useEffect(() => {
     void loadPresetVaultData();
@@ -90,12 +118,15 @@ export default function Home() {
   useEffect(() => {
     const applyNativePayload = (payload?: NativeVaultPayload) => {
       if (!payload) return;
-      setHasNativeVaultData(true);
-      setVaultPath(payload.path ?? "");
-      setVaultFolders(payload.folders ?? []);
-      setVaultGraph(payload.graph ?? null);
-      setVaultConversations(payload.conversations ?? []);
-      setSelectedFolderPath(null);
+      applyVaultData(
+        {
+          path: payload.path,
+          folders: payload.folders,
+          graph: payload.graph,
+          conversations: payload.conversations,
+        },
+        { markAsNative: true }
+      );
     };
 
     const handleNativeVaultSelection = (event: Event) => {
@@ -113,7 +144,7 @@ export default function Home() {
     return () => {
       window.removeEventListener("brain2-native-vault-selected", handleNativeVaultSelection);
     };
-  }, []);
+  }, [applyVaultData]);
 
   useEffect(() => {
     if (selectedConversationId && !selectedConversation) {
@@ -263,6 +294,7 @@ export default function Home() {
       >
         {activeView === "brain" ? (
           <BrainGraphView
+            key={`brain-${vaultDataVersion}`}
             onClose={() => setIsYourBrainOpen(false)}
             graph={vaultGraph}
             loading={graphLoading}
