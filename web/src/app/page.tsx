@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import {
+  getRedirectResult,
   onAuthStateChanged,
   signOut,
   signInWithPopup,
@@ -92,6 +93,13 @@ type NativeBridge = {
     folderPath?: string;
   }) => void;
 };
+
+function isBrain2NativeAppShell(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return Boolean((window as unknown as { Brain2Native?: NativeBridge }).Brain2Native?.isAvailable);
+}
 
 function toIsoDate(timestamp: number): string {
   return new Date(timestamp).toISOString();
@@ -327,28 +335,48 @@ export default function Home() {
     }
 
     let unsubscribed = false;
+    let unsubscribeAuth: (() => void) | undefined;
     const auth = getFirebaseAuthClient();
 
-    const unsubscribe = onAuthStateChanged(auth, (user: User | null) => {
+    void (async () => {
+      try {
+        await getRedirectResult(auth);
+      } catch (error: unknown) {
+        if (unsubscribed) {
+          return;
+        }
+        const code = (error as { code?: string }).code;
+        const message = error instanceof Error ? error.message : String(error);
+        if (code !== "auth/operation-not-supported-in-this-environment") {
+          setAuthError(message || "Falha ao concluir o login apos o retorno do Google.");
+        }
+      }
+
       if (unsubscribed) {
         return;
       }
 
-      setAuthUser(user);
-      setIsAuthenticated(Boolean(user));
-      setAuthError(null);
-      setIsAuthInitializing(false);
+      unsubscribeAuth = onAuthStateChanged(auth, (user: User | null) => {
+        if (unsubscribed) {
+          return;
+        }
 
-      if (user) {
-        void registerOrUpdateUserInFirestore(user).catch((err) => {
-          logFirestoreRegistrationError(err);
-        });
-      }
-    });
+        setAuthUser(user);
+        setIsAuthenticated(Boolean(user));
+        setAuthError(null);
+        setIsAuthInitializing(false);
+
+        if (user) {
+          void registerOrUpdateUserInFirestore(user).catch((err) => {
+            logFirestoreRegistrationError(err);
+          });
+        }
+      });
+    })();
 
     return () => {
       unsubscribed = true;
-      unsubscribe();
+      unsubscribeAuth?.();
     };
   }, []);
 
@@ -1003,11 +1031,17 @@ export default function Home() {
 
     try {
       setAuthError(null);
+
+      if (isBrain2NativeAppShell()) {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+
       await signInWithPopup(auth, provider);
     } catch (error) {
       const authIssue = error as { code?: string; message?: string };
 
-      if (authIssue.code === "auth/popup-blocked") {
+      if (authIssue.code === "auth/popup-blocked" || authIssue.code === "auth/cancelled-popup-request") {
         await signInWithRedirect(auth, provider);
         return;
       }

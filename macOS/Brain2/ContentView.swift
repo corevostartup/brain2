@@ -48,6 +48,9 @@ struct WebView: NSViewRepresentable {
         context.coordinator.attach(webView: webView)
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
+        // Google/Firebase OAuth costuma bloquear user-agents de WebView “puros”; Safari reduz falhas no login.
+        webView.customUserAgent =
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15"
         if #available(macOS 13.0, *) {
             webView.underPageBackgroundColor = NSColor(
                 calibratedRed: 12 / 255,
