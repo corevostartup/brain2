@@ -6,6 +6,9 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- Servidor HTTP local em 127.0.0.1 (redirect OAuth Google); sem isto NWListener falha com "operation not permitted". -->
+	<key>com.apple.security.network.server</key>
+	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
 </dict>

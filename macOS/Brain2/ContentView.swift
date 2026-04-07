@@ -90,6 +90,10 @@ struct WebView: NSViewRepresentable {
 
         private weak var webView: WKWebView?
         private var googleAuthSession: ASWebAuthenticationSession?
+        private var googleLoopbackReceiver: OAuthLoopbackRedirectReceiver?
+        private var googleOAuthCompletedViaLoopback = false
+        private let googleOAuthOutcomeLock = NSLock()
+        private var googleOAuthOutcomeDelivered = false
         private var oauthPresentationWindow: NSWindow?
         private let fileManager = FileManager.default
         private lazy var wikilinkRegex = try? NSRegularExpression(
@@ -191,6 +195,37 @@ struct WebView: NSViewRepresentable {
                 return
             }
 
+            googleOAuthCompletedViaLoopback = false
+            googleOAuthOutcomeDelivered = false
+            googleLoopbackReceiver?.stop()
+            let receiver = OAuthLoopbackRedirectReceiver(port: GoogleDesktopOAuth.redirectPort) { [weak self] callbackURL in
+                guard let self else { return }
+                self.googleLoopbackReceiver = nil
+                self.googleOAuthCompletedViaLoopback = true
+                self.googleAuthSession?.cancel()
+                self.handleGoogleOAuthRedirectURL(callbackURL, clientId: clientId, codeVerifier: verifier)
+            }
+            googleLoopbackReceiver = receiver
+
+            receiver.start { [weak self] error in
+                guard let self else { return }
+                if let error {
+                    self.googleLoopbackReceiver = nil
+                    self.publishGoogleSignInError(
+                        "Nao foi possivel abrir a porta \(GoogleDesktopOAuth.redirectPort) para o login Google (\(error.localizedDescription)). Verifique se outra app usa essa porta."
+                    )
+                    return
+                }
+                self.presentGoogleOAuthSession(authURL: authURL, anchor: anchor, clientId: clientId, codeVerifier: verifier)
+            }
+        }
+
+        private func presentGoogleOAuthSession(
+            authURL: URL,
+            anchor: NSWindow,
+            clientId: String,
+            codeVerifier: String
+        ) {
             oauthPresentationWindow = anchor
 
             let session = ASWebAuthenticationSession(
@@ -200,42 +235,23 @@ struct WebView: NSViewRepresentable {
                 guard let self else { return }
                 self.googleAuthSession = nil
                 self.oauthPresentationWindow = nil
+                self.googleLoopbackReceiver?.stop()
+                self.googleLoopbackReceiver = nil
+
+                if self.googleOAuthCompletedViaLoopback {
+                    return
+                }
 
                 if let error {
                     self.publishGoogleSignInError(error.localizedDescription)
                     return
                 }
 
-                guard let callbackURL,
-                      let items = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems
-                else {
+                guard let callbackURL else {
                     self.publishGoogleSignInError("Resposta inesperada do Google.")
                     return
                 }
-
-                if let errorCode = items.first(where: { $0.name == "error" })?.value {
-                    let desc = items.first(where: { $0.name == "error_description" })?.value ?? errorCode
-                    self.publishGoogleSignInError(desc)
-                    return
-                }
-
-                guard let code = items.first(where: { $0.name == "code" })?.value else {
-                    self.publishGoogleSignInError("Codigo de autorizacao ausente.")
-                    return
-                }
-
-                GoogleDesktopOAuth.exchangeCodeForTokens(
-                    code: code,
-                    clientId: clientId,
-                    codeVerifier: verifier
-                ) { result in
-                    switch result {
-                    case .success(let tokens):
-                        self.publishGoogleTokens(idToken: tokens.idToken, accessToken: tokens.accessToken)
-                    case .failure(let err):
-                        self.publishGoogleSignInError(err.localizedDescription)
-                    }
-                }
+                self.handleGoogleOAuthRedirectURL(callbackURL, clientId: clientId, codeVerifier: codeVerifier)
             }
 
             session.presentationContextProvider = self
@@ -245,7 +261,50 @@ struct WebView: NSViewRepresentable {
             if !session.start() {
                 googleAuthSession = nil
                 oauthPresentationWindow = nil
+                googleLoopbackReceiver?.stop()
+                googleLoopbackReceiver = nil
                 publishGoogleSignInError("Nao foi possivel abrir a janela de login do Google.")
+            }
+        }
+
+        private func handleGoogleOAuthRedirectURL(_ callbackURL: URL, clientId: String, codeVerifier: String) {
+            guard let items = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems else {
+                publishGoogleSignInError("Resposta inesperada do Google.")
+                return
+            }
+
+            if let errorCode = items.first(where: { $0.name == "error" })?.value {
+                let desc = items.first(where: { $0.name == "error_description" })?.value ?? errorCode
+                publishGoogleSignInError(desc)
+                return
+            }
+
+            guard let code = items.first(where: { $0.name == "code" })?.value else {
+                publishGoogleSignInError("Codigo de autorizacao ausente.")
+                return
+            }
+
+            googleOAuthOutcomeLock.lock()
+            if googleOAuthOutcomeDelivered {
+                googleOAuthOutcomeLock.unlock()
+                return
+            }
+            googleOAuthOutcomeDelivered = true
+            googleOAuthOutcomeLock.unlock()
+
+            GoogleDesktopOAuth.exchangeCodeForTokens(
+                code: code,
+                clientId: clientId,
+                codeVerifier: codeVerifier,
+                clientSecret: NativeOAuthSecrets.googleOAuthDesktopClientSecret
+            ) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success(let tokens):
+                    self.publishGoogleTokens(idToken: tokens.idToken, accessToken: tokens.accessToken)
+                case .failure(let err):
+                    self.publishGoogleSignInError(err.localizedDescription)
+                }
             }
         }
 
