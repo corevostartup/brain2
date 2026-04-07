@@ -4,6 +4,7 @@ export type ChatMessage = {
   id: string;
   role: ChatRole;
   content: string;
+  createdAt?: number;
 };
 
 export type ChatCompletionRequestMessage = {

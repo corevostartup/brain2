@@ -1,5 +1,12 @@
 import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
+
+const inter = Inter({
+  subsets: ["latin"],
+  weight: ["300", "400", "500"],
+  display: "block",
+});
 
 export const metadata: Metadata = {
   title: "Brain2 — The Extension of Your Mind",
@@ -20,16 +27,47 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="pt-BR" className="h-full" style={{ touchAction: "manipulation", height: "100vh", width: "100vw" }}>
+    <html
+      lang="pt-BR"
+      className="h-full"
+      data-theme="dark"
+      style={{ touchAction: "manipulation", height: "100vh", width: "100vw" }}
+      suppressHydrationWarning
+    >
       <head>
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap"
-          rel="stylesheet"
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function () {
+                function applyTheme(theme) {
+                  document.documentElement.setAttribute('data-theme', theme);
+                  if (document.body) {
+                    document.body.setAttribute('data-theme', theme);
+                  }
+                }
+
+                try {
+                  var savedTheme = localStorage.getItem('brain2-theme');
+                  var nextTheme = savedTheme === 'light' ? 'light' : 'dark';
+                  applyTheme(nextTheme);
+                  document.addEventListener('DOMContentLoaded', function () {
+                    applyTheme(nextTheme);
+                  });
+                } catch (_) {
+                  applyTheme('dark');
+                  document.addEventListener('DOMContentLoaded', function () {
+                    applyTheme('dark');
+                  });
+                }
+              })();
+            `,
+          }}
         />
+        <noscript>
+          <style>{`body { opacity: 1 !important; visibility: visible !important; }`}</style>
+        </noscript>
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -45,7 +83,14 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="h-full flex flex-col" style={{ height: "100vh", width: "100vw" }}>{children}</body>
+      <body
+        className={`${inter.className} h-full flex flex-col`}
+        data-theme="dark"
+        style={{ height: "100vh", width: "100vw", opacity: 0, visibility: "hidden" }}
+        suppressHydrationWarning
+      >
+        {children}
+      </body>
     </html>
   );
 }

@@ -1,18 +1,178 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { FolderTreeNode, VaultConversation, VaultGraph } from "@/lib/vault";
+import {
+  buildConversationsFromMarkdownFiles,
+  buildGraphFromMarkdownFiles,
+  type VaultMarkdownFile,
+} from "@/lib/vaultMarkdown";
 
-export const PRESET_VAULT_PATH =
+export let PRESET_VAULT_PATH =
   "/Users/Cassio/Library/Mobile Documents/com~apple~CloudDocs/Brain2/Vault";
 
 const WIKILINK_REGEX = /\[\[([^\]|#]+?)(?:#[^\]|]*)?(?:\|[^\]]*?)?\]\]/g;
 
-type MarkdownFile = {
-  name: string;
-  path: string;
-  content: string;
-  modifiedAt: number;
-};
+function normalizeRelativePath(relativePath: string): string {
+  return relativePath
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join(path.sep);
+}
+
+function resolvePresetPath(relativePath: string): string {
+  const rootPath = path.resolve(PRESET_VAULT_PATH);
+  const normalized = normalizeRelativePath(relativePath);
+  const resolvedPath = path.resolve(rootPath, normalized);
+
+  if (resolvedPath === rootPath) {
+    return resolvedPath;
+  }
+
+  if (!resolvedPath.startsWith(`${rootPath}${path.sep}`)) {
+    throw new Error("Invalid folder path.");
+  }
+
+  return resolvedPath;
+}
+
+function validateFolderName(folderName: string): string {
+  const trimmed = folderName.trim();
+  if (!trimmed) {
+    throw new Error("Folder name is required.");
+  }
+  if (trimmed === "." || trimmed === "..") {
+    throw new Error("Invalid folder name.");
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error("Folder name must not contain path separators.");
+  }
+  return trimmed;
+}
+
+function normalizeConversationPath(conversationPath: string): string {
+  const normalized = normalizeRelativePath(conversationPath);
+  if (!normalized) {
+    throw new Error("Conversation path is required.");
+  }
+  return normalized.endsWith(".md") ? normalized : `${normalized}.md`;
+}
+
+function validateConversationTitle(newTitle: string): string {
+  const trimmed = newTitle.trim();
+  if (!trimmed) {
+    throw new Error("Conversation title is required.");
+  }
+  if (trimmed === "." || trimmed === "..") {
+    throw new Error("Invalid conversation title.");
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    throw new Error("Conversation title must not contain path separators.");
+  }
+  return trimmed;
+}
+
+function sanitizeFileSegment(raw: string, fallback: string): string {
+  const sanitized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/--+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return sanitized || fallback;
+}
+
+function formatConversationFileTitle(raw: string): string {
+  const cleaned = raw
+    .replace(/[._-]+/g, " ")
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) {
+    return "Conversation";
+  }
+
+  return cleaned
+    .split(" ")
+    .map((word) => {
+      const lower = word.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasWikilinkTarget(markdown: string, target: string): boolean {
+  const escapedTarget = escapeRegex(target.trim());
+  if (!escapedTarget) {
+    return false;
+  }
+
+  const wikilinkRegex = new RegExp(`\\[\\[\\s*${escapedTarget}(?:\\s*(?:\\]\\]|#|\\|))`, "i");
+  return wikilinkRegex.test(markdown);
+}
+
+function insertFolderCorrelationWikilinkInMetadata(markdown: string, folderName: string): string {
+  if (hasWikilinkTarget(markdown, folderName)) {
+    return markdown;
+  }
+
+  const correlationLine = `- Correlation: [[${folderName}]]`;
+  const lines = markdown.split(/\r?\n/);
+
+  const modelLineIndex = lines.findIndex((line) => /^-\s*Model\s*:/i.test(line.trim()));
+  if (modelLineIndex >= 0) {
+    lines.splice(modelLineIndex + 1, 0, correlationLine);
+    return lines.join("\n");
+  }
+
+  const firstMetadataIndex = lines.findIndex((line) => line.trim().startsWith("- "));
+  if (firstMetadataIndex >= 0) {
+    let insertIndex = firstMetadataIndex;
+    while (insertIndex < lines.length && lines[insertIndex].trim().startsWith("- ")) {
+      insertIndex += 1;
+    }
+    lines.splice(insertIndex, 0, correlationLine);
+    return lines.join("\n");
+  }
+
+  if (lines.length > 0 && lines[0].trim().startsWith("#")) {
+    const insertIndex = lines[1]?.trim() === "" ? 2 : 1;
+    lines.splice(insertIndex, 0, correlationLine);
+    return lines.join("\n");
+  }
+
+  return `${correlationLine}\n${markdown}`;
+}
+
+async function readMarkdownFileOrEmpty(fileAbsolutePath: string): Promise<string> {
+  try {
+    const stats = await fs.stat(fileAbsolutePath);
+    if (!stats.isFile()) {
+      throw new Error("Folder correlation target is not a file.");
+    }
+
+    return await fs.readFile(fileAbsolutePath, "utf8");
+  } catch (error) {
+    const errno = error as { code?: string };
+    if (errno.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  }
+}
+
+async function ensureMarkdownCorrelationWikilink(fileAbsolutePath: string, targetFolderName: string): Promise<void> {
+  const existingMarkdown = await readMarkdownFileOrEmpty(fileAbsolutePath);
+  const nextMarkdown = insertFolderCorrelationWikilinkInMetadata(existingMarkdown, targetFolderName);
+  const normalizedNextMarkdown = nextMarkdown.endsWith("\n") ? nextMarkdown : `${nextMarkdown}\n`;
+
+  await fs.writeFile(fileAbsolutePath, normalizedNextMarkdown, "utf8");
+}
 
 async function readFolderTreeFromPath(dirPath: string): Promise<FolderTreeNode[]> {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -44,9 +204,9 @@ async function readFolderTreeFromPath(dirPath: string): Promise<FolderTreeNode[]
 async function readAllMarkdownFilesFromPath(
   dirPath: string,
   basePath = ""
-): Promise<MarkdownFile[]> {
+): Promise<VaultMarkdownFile[]> {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
-  const files: MarkdownFile[] = [];
+  const files: VaultMarkdownFile[] = [];
 
   for (const entry of entries) {
     if (entry.name.startsWith(".")) {
@@ -87,78 +247,6 @@ async function readAllMarkdownFilesFromPath(
   return files;
 }
 
-function buildConversationsFromMarkdownFiles(files: MarkdownFile[]): VaultConversation[] {
-  return files
-    .map((file) => ({
-      id: file.path.toLowerCase(),
-      title: file.name,
-      path: file.path,
-      modifiedAt: file.modifiedAt,
-      content: file.content,
-    }))
-    .sort((a, b) => b.modifiedAt - a.modifiedAt);
-}
-
-function parseWikilinks(content: string): string[] {
-  const links: string[] = [];
-  let match: RegExpExecArray | null;
-
-  while ((match = WIKILINK_REGEX.exec(content)) !== null) {
-    const target = match[1].trim();
-    if (target) {
-      links.push(target);
-    }
-  }
-
-  return links;
-}
-
-function buildGraphFromMarkdownFiles(files: MarkdownFile[]): VaultGraph {
-  const nodeMap = new Map<string, string>();
-
-  for (const file of files) {
-    nodeMap.set(file.name.toLowerCase(), file.name);
-  }
-
-  const nodes = Array.from(nodeMap.values()).map((label) => ({
-    id: label.toLowerCase(),
-    label,
-  }));
-
-  const edges: Array<{ source: string; target: string }> = [];
-  const edgeSet = new Set<string>();
-
-  for (const file of files) {
-    const sourceId = file.name.toLowerCase();
-    const links = parseWikilinks(file.content);
-
-    for (const link of links) {
-      const targetId = link.toLowerCase();
-
-      if (!nodeMap.has(targetId)) {
-        nodeMap.set(targetId, link);
-        nodes.push({ id: targetId, label: link });
-      }
-
-      if (sourceId === targetId) {
-        continue;
-      }
-
-      const edgeKey =
-        sourceId < targetId
-          ? `${sourceId}::${targetId}`
-          : `${targetId}::${sourceId}`;
-
-      if (!edgeSet.has(edgeKey)) {
-        edgeSet.add(edgeKey);
-        edges.push({ source: sourceId, target: targetId });
-      }
-    }
-  }
-
-  return { nodes, edges };
-}
-
 export async function getPresetVaultData(): Promise<{
   path: string;
   folders: FolderTreeNode[];
@@ -176,4 +264,267 @@ export async function getPresetVaultData(): Promise<{
     graph,
     conversations,
   };
+}
+
+export async function renamePresetVault(vaultName: string): Promise<void> {
+  const safeVaultName = validateFolderName(vaultName);
+  const currentRootPath = path.resolve(PRESET_VAULT_PATH);
+  const currentStats = await fs.stat(currentRootPath);
+
+  if (!currentStats.isDirectory()) {
+    throw new Error("Preset vault root is not a directory.");
+  }
+
+  const parentPath = path.dirname(currentRootPath);
+  const nextRootPath = path.resolve(parentPath, safeVaultName);
+
+  if (path.dirname(nextRootPath) !== parentPath) {
+    throw new Error("Invalid vault name.");
+  }
+
+  if (nextRootPath === currentRootPath) {
+    return;
+  }
+
+  try {
+    await fs.access(nextRootPath);
+    throw new Error("A vault with this name already exists.");
+  } catch (error) {
+    const errno = error as { code?: string };
+    if (errno.code && errno.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  await fs.rename(currentRootPath, nextRootPath);
+  PRESET_VAULT_PATH = nextRootPath;
+}
+
+export async function savePresetConversation(
+  conversationId: string,
+  title: string,
+  markdown: string,
+  folderPath?: string
+): Promise<void> {
+  if (!markdown.trim()) {
+    throw new Error("Conversation markdown is required.");
+  }
+
+  const safeConversationId = sanitizeFileSegment(
+    conversationId || `chat-${Date.now().toString(36)}`,
+    "conversation"
+  );
+  const formattedTitle = formatConversationFileTitle(title || "conversation");
+
+  const normalizedFolderPath = normalizeRelativePath(folderPath ?? "");
+  const targetFolderRelativePath = normalizedFolderPath || "Brain2Memories";
+  const targetFolderAbsolutePath = resolvePresetPath(targetFolderRelativePath);
+  await fs.mkdir(targetFolderAbsolutePath, { recursive: true });
+
+  let markdownToPersist = markdown;
+  if (normalizedFolderPath) {
+    const folderName = path.basename(normalizedFolderPath);
+    if (folderName) {
+      const folderCorrelationRelativePath = `${normalizedFolderPath}/${folderName}.md`;
+      const folderCorrelationAbsolutePath = resolvePresetPath(folderCorrelationRelativePath);
+
+      try {
+        const folderCorrelationStats = await fs.stat(folderCorrelationAbsolutePath);
+        if (!folderCorrelationStats.isFile()) {
+          throw new Error("Folder correlation target is not a file.");
+        }
+      } catch {
+        // Ensure mandatory folder-correlation file exists.
+        await fs.writeFile(folderCorrelationAbsolutePath, "", "utf8");
+      }
+
+      markdownToPersist = insertFolderCorrelationWikilinkInMetadata(markdown, folderName);
+    }
+  }
+
+  const filename = `${formattedTitle} - (${safeConversationId}).md`;
+  const fileAbsolutePath = resolvePresetPath(`${targetFolderRelativePath}/${filename}`);
+  const conversationFileMetadataSuffix = ` - (${safeConversationId}).md`;
+  const conversationFileSuffix = `--${safeConversationId}.md`;
+  const legacyConversationFilePrefix = `${safeConversationId}-`;
+
+  const folderEntries = await fs.readdir(targetFolderAbsolutePath, { withFileTypes: true });
+  const existingConversationFileName = folderEntries.find((entry) =>
+    entry.isFile() &&
+    entry.name !== filename &&
+    entry.name.endsWith(".md") &&
+    (
+      entry.name.endsWith(conversationFileMetadataSuffix) ||
+      entry.name.endsWith(conversationFileSuffix) ||
+      entry.name.startsWith(legacyConversationFilePrefix)
+    )
+  )?.name;
+
+  if (existingConversationFileName && existingConversationFileName !== filename) {
+    const existingConversationAbsolutePath = resolvePresetPath(
+      `${targetFolderRelativePath}/${existingConversationFileName}`
+    );
+
+    await fs.rm(fileAbsolutePath, { force: true });
+    await fs.rename(existingConversationAbsolutePath, fileAbsolutePath);
+  }
+
+  const normalizedMarkdown = markdownToPersist.endsWith("\n") ? markdownToPersist : `${markdownToPersist}\n`;
+
+  await fs.writeFile(fileAbsolutePath, normalizedMarkdown, "utf8");
+}
+
+export async function createPresetFolder(parentPath: string, folderName: string): Promise<void> {
+  const safeFolderName = validateFolderName(folderName);
+  const parentAbsolutePath = resolvePresetPath(parentPath);
+  const normalizedParentPath = normalizeRelativePath(parentPath);
+
+  const parentStats = await fs.stat(parentAbsolutePath);
+  if (!parentStats.isDirectory()) {
+    throw new Error("Parent path is not a directory.");
+  }
+
+  const nextFolderRelativePath = parentPath ? `${parentPath}/${safeFolderName}` : safeFolderName;
+  const nextFolderAbsolutePath = resolvePresetPath(nextFolderRelativePath);
+
+  await fs.mkdir(nextFolderAbsolutePath);
+
+  const bootstrapConversationRelativePath = `${nextFolderRelativePath}/${safeFolderName}.md`;
+  const bootstrapConversationAbsolutePath = resolvePresetPath(bootstrapConversationRelativePath);
+
+  try {
+    await fs.writeFile(bootstrapConversationAbsolutePath, "", "utf8");
+
+    // Mandatory system rule: when creating a subfolder, correlate child and parent folder markdowns.
+    if (normalizedParentPath) {
+      const parentFolderName = path.basename(normalizedParentPath);
+      if (parentFolderName) {
+        const parentCorrelationRelativePath = `${normalizedParentPath}/${parentFolderName}.md`;
+        const parentCorrelationAbsolutePath = resolvePresetPath(parentCorrelationRelativePath);
+
+        await ensureMarkdownCorrelationWikilink(bootstrapConversationAbsolutePath, parentFolderName);
+        await ensureMarkdownCorrelationWikilink(parentCorrelationAbsolutePath, safeFolderName);
+      }
+    }
+  } catch (error) {
+    // Keep folder creation atomic for the caller: if bootstrap .md fails, rollback the folder.
+    await fs.rm(nextFolderAbsolutePath, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export async function deletePresetFolder(folderPath: string): Promise<void> {
+  const normalizedFolderPath = normalizeRelativePath(folderPath);
+  if (!normalizedFolderPath) {
+    throw new Error("Folder path is required.");
+  }
+
+  const targetAbsolutePath = resolvePresetPath(folderPath);
+  const rootAbsolutePath = path.resolve(PRESET_VAULT_PATH);
+
+  if (targetAbsolutePath === rootAbsolutePath) {
+    throw new Error("Deleting the vault root is not allowed.");
+  }
+
+  const targetStats = await fs.stat(targetAbsolutePath);
+  if (!targetStats.isDirectory()) {
+    throw new Error("Target path is not a directory.");
+  }
+
+  await fs.rm(targetAbsolutePath, { recursive: true, force: false });
+}
+
+export async function renamePresetFolder(
+  folderPath: string,
+  newFolderName: string
+): Promise<void> {
+  const normalizedFolderPath = normalizeRelativePath(folderPath);
+  if (!normalizedFolderPath) {
+    throw new Error("Folder path is required.");
+  }
+
+  const safeFolderName = validateFolderName(newFolderName);
+  const currentAbsolutePath = resolvePresetPath(normalizedFolderPath);
+  const currentStats = await fs.stat(currentAbsolutePath);
+
+  if (!currentStats.isDirectory()) {
+    throw new Error("Folder path is not a directory.");
+  }
+
+  const rootAbsolutePath = path.resolve(PRESET_VAULT_PATH);
+  if (currentAbsolutePath === rootAbsolutePath) {
+    throw new Error("Renaming the vault root is not allowed.");
+  }
+
+  const parentRelativePath = path.dirname(normalizedFolderPath);
+  const parentPathSegment = parentRelativePath === "." ? "" : parentRelativePath;
+  const nextRelativePath = parentPathSegment
+    ? `${parentPathSegment}/${safeFolderName}`
+    : safeFolderName;
+  const nextAbsolutePath = resolvePresetPath(nextRelativePath);
+
+  if (nextAbsolutePath === currentAbsolutePath) {
+    return;
+  }
+
+  try {
+    await fs.access(nextAbsolutePath);
+    throw new Error("A folder with this name already exists.");
+  } catch (error) {
+    const errno = error as { code?: string };
+    if (errno.code && errno.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  await fs.rename(currentAbsolutePath, nextAbsolutePath);
+}
+
+export async function renamePresetConversation(
+  conversationPath: string,
+  newTitle: string
+): Promise<void> {
+  const normalizedConversationPath = normalizeConversationPath(conversationPath);
+  const safeTitle = validateConversationTitle(newTitle);
+
+  const currentAbsolutePath = resolvePresetPath(normalizedConversationPath);
+  const currentStats = await fs.stat(currentAbsolutePath);
+  if (!currentStats.isFile()) {
+    throw new Error("Conversation path is not a file.");
+  }
+
+  const parentRelativePath = path.dirname(normalizedConversationPath);
+  const parentPathSegment = parentRelativePath === "." ? "" : parentRelativePath;
+  const nextRelativePath = parentPathSegment
+    ? `${parentPathSegment}/${safeTitle}.md`
+    : `${safeTitle}.md`;
+  const nextAbsolutePath = resolvePresetPath(nextRelativePath);
+
+  if (nextAbsolutePath === currentAbsolutePath) {
+    return;
+  }
+
+  try {
+    await fs.access(nextAbsolutePath);
+    throw new Error("A conversation with this name already exists.");
+  } catch (error) {
+    const errno = error as { code?: string };
+    if (errno.code && errno.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  await fs.rename(currentAbsolutePath, nextAbsolutePath);
+}
+
+export async function deletePresetConversation(conversationPath: string): Promise<void> {
+  const normalizedConversationPath = normalizeConversationPath(conversationPath);
+  const targetAbsolutePath = resolvePresetPath(normalizedConversationPath);
+  const targetStats = await fs.stat(targetAbsolutePath);
+
+  if (!targetStats.isFile()) {
+    throw new Error("Conversation path is not a file.");
+  }
+
+  await fs.rm(targetAbsolutePath, { force: false });
 }

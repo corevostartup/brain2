@@ -12,7 +12,29 @@
   --pill-active: rgba(255, 255, 255, 0.08);
   --send-bg: rgba(255, 255, 255, 0.07);
   --send-bg-hover: rgba(255, 255, 255, 0.12);
+  --hero-title: #d4d4d4;
+  --hero-subtitle: #464646;
   --desktop-sidebar-width: 290px;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"],
+html[data-theme="light"],
+body[data-theme="light"] {
+  --background: #f4f5f7;
+  --foreground: #1f242c;
+  --bar-bg: #ffffff;
+  --bar-border: rgba(25, 32, 43, 0.1);
+  --bar-border-hover: rgba(25, 32, 43, 0.18);
+  --muted: #6c7583;
+  --muted-hover: #37414f;
+  --pill-bg: rgba(25, 32, 43, 0.06);
+  --pill-active: rgba(25, 32, 43, 0.1);
+  --send-bg: rgba(25, 32, 43, 0.08);
+  --send-bg-hover: rgba(25, 32, 43, 0.14);
+  --hero-title: #1f242c;
+  --hero-subtitle: #6c7583;
+  color-scheme: light;
 }
 
 * {

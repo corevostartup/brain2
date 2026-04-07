@@ -113,6 +113,12 @@ struct WebView: NSViewRepresentable {
                 return
             }
 
+            if type == "renameVault" {
+                let renamePayload = payload["payload"] as? [String: Any] ?? [:]
+                renameVaultFolder(renamePayload)
+                return
+            }
+
             if type == "saveConversation" {
                 let conversationPayload = payload["payload"] as? [String: Any] ?? [:]
                 saveConversationToVault(conversationPayload)
@@ -179,6 +185,11 @@ struct WebView: NSViewRepresentable {
                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'pickDirectory' });
               } catch (_) {}
             };
+                        window.Brain2Native.renameVault = function (payload) {
+                            try {
+                                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'renameVault', payload: payload || {} });
+                            } catch (_) {}
+                        };
             window.Brain2Native.saveConversation = function (payload) {
               try {
                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'saveConversation', payload: payload || {} });
@@ -213,26 +224,53 @@ struct WebView: NSViewRepresentable {
 
             let conversationID = (payload["conversationId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             let rawTitle = (payload["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawFolderPath = (payload["folderPath"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 guard let self else { return }
 
                 self.withSecurityScopedAccess(to: vaultURL) {
                     let memoriesURL = vaultURL.appendingPathComponent(Self.memoriesFolderName, isDirectory: true)
+                    let normalizedFolderPath = self.normalizeRelativeFolderPath(rawFolderPath)
+                    let targetFolderURL = self.resolveTargetFolderURL(
+                        normalizedFolderPath: normalizedFolderPath,
+                        vaultURL: vaultURL,
+                        fallbackURL: memoriesURL
+                    )
 
                     do {
                         try self.fileManager.createDirectory(
-                            at: memoriesURL,
+                            at: targetFolderURL,
                             withIntermediateDirectories: true,
                             attributes: nil
                         )
 
                         let safeConversationID = self.sanitizeFileName(conversationID ?? "chat-\(Int(Date().timeIntervalSince1970))")
-                        let safeTitle = self.sanitizeFileName(rawTitle ?? "conversation")
-                        let filename = "\(safeConversationID)-\(safeTitle).md"
-                        let fileURL = memoriesURL.appendingPathComponent(filename)
+                        let formattedTitle = self.formatConversationFileTitle(rawTitle ?? "conversation")
+                        let filename = "\(formattedTitle) - (\(safeConversationID)).md"
+                        let conversationFileMetadataSuffix = " - (\(safeConversationID)).md"
+                        let conversationFileSuffix = "--\(safeConversationID).md"
+                        let legacyConversationFilePrefix = "\(safeConversationID)-"
+                        let fileURL = targetFolderURL.appendingPathComponent(filename)
+                        if let existingConversationURL = self.findExistingConversationFile(
+                            in: targetFolderURL,
+                            metadataSuffix: conversationFileMetadataSuffix,
+                            suffix: conversationFileSuffix,
+                            legacyPrefix: legacyConversationFilePrefix,
+                            excludingFileName: filename
+                        ), existingConversationURL.lastPathComponent != filename {
+                            if self.fileManager.fileExists(atPath: fileURL.path) {
+                                try self.fileManager.removeItem(at: fileURL)
+                            }
+                            try self.fileManager.moveItem(at: existingConversationURL, to: fileURL)
+                        }
+                        let markdownToPersist = self.applyFolderCorrelationIfNeeded(
+                            markdown: markdown,
+                            targetFolderURL: targetFolderURL,
+                            normalizedFolderPath: normalizedFolderPath
+                        )
 
-                        try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+                        try markdownToPersist.write(to: fileURL, atomically: true, encoding: .utf8)
                     } catch {
                         return
                     }
@@ -256,6 +294,168 @@ struct WebView: NSViewRepresentable {
             return compact
         }
 
+        private func formatConversationFileTitle(_ raw: String) -> String {
+            let cleaned = raw
+                .replacingOccurrences(of: "[._-]+", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "[\\\\/:*?\"<>|]+", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !cleaned.isEmpty else {
+                return "Conversation"
+            }
+
+            return cleaned
+                .split(separator: " ")
+                .map { token in
+                    let lower = token.lowercased()
+                    guard let first = lower.first else { return "" }
+                    return String(first).uppercased() + lower.dropFirst()
+                }
+                .joined(separator: " ")
+        }
+
+        private func normalizeRelativeFolderPath(_ rawPath: String?) -> String? {
+            guard let rawPath else {
+                return nil
+            }
+
+            let normalized = rawPath
+                .replacingOccurrences(of: "\\\\", with: "/")
+                .split(separator: "/")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
+                .joined(separator: "/")
+
+            return normalized.isEmpty ? nil : normalized
+        }
+
+        private func resolveTargetFolderURL(
+            normalizedFolderPath: String?,
+            vaultURL: URL,
+            fallbackURL: URL
+        ) -> URL {
+            guard let normalizedFolderPath, !normalizedFolderPath.isEmpty else {
+                return fallbackURL
+            }
+
+            var targetURL = vaultURL
+            for component in normalizedFolderPath.split(separator: "/") {
+                targetURL.appendPathComponent(String(component), isDirectory: true)
+            }
+
+            let rootPath = vaultURL.standardizedFileURL.path
+            let targetPath = targetURL.standardizedFileURL.path
+            guard targetPath == rootPath || targetPath.hasPrefix(rootPath + "/") else {
+                return fallbackURL
+            }
+
+            return targetURL
+        }
+
+        private func findExistingConversationFile(
+            in folderURL: URL,
+            metadataSuffix: String,
+            suffix: String,
+            legacyPrefix: String,
+            excludingFileName: String
+        ) -> URL? {
+            guard let entries = try? fileManager.contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else {
+                return nil
+            }
+
+            for entry in entries {
+                var isDirectory: ObjCBool = false
+                guard fileManager.fileExists(atPath: entry.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+                    continue
+                }
+
+                let name = entry.lastPathComponent
+                guard name != excludingFileName else {
+                    continue
+                }
+
+                if
+                    name.lowercased().hasSuffix(".md"),
+                    (name.hasSuffix(metadataSuffix) || name.hasSuffix(suffix) || name.hasPrefix(legacyPrefix))
+                {
+                    return entry
+                }
+            }
+
+            return nil
+        }
+
+        private func applyFolderCorrelationIfNeeded(
+            markdown: String,
+            targetFolderURL: URL,
+            normalizedFolderPath: String?
+        ) -> String {
+            guard let normalizedFolderPath, !normalizedFolderPath.isEmpty else {
+                return markdown
+            }
+
+            let folderName = targetFolderURL.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !folderName.isEmpty else {
+                return markdown
+            }
+
+            let folderCorrelationURL = targetFolderURL.appendingPathComponent("\(folderName).md")
+            var isDirectory: ObjCBool = false
+            if fileManager.fileExists(atPath: folderCorrelationURL.path, isDirectory: &isDirectory) {
+                guard !isDirectory.boolValue else {
+                    return markdown
+                }
+            } else {
+                _ = fileManager.createFile(atPath: folderCorrelationURL.path, contents: Data(), attributes: nil)
+            }
+
+            let alreadyCorrelated = parseWikilinks(from: markdown).contains {
+                $0.caseInsensitiveCompare(folderName) == .orderedSame
+            }
+            if alreadyCorrelated {
+                return markdown
+            }
+
+            let correlationLine = "- Correlation: [[\(folderName)]]"
+            var lines = markdown.components(separatedBy: .newlines)
+
+            if let modelIndex = lines.firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("- model:")
+            }) {
+                lines.insert(correlationLine, at: modelIndex + 1)
+                return lines.joined(separator: "\n")
+            }
+
+            if let firstMetadataIndex = lines.firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("- ")
+            }) {
+                var insertIndex = firstMetadataIndex
+                while insertIndex < lines.count {
+                    let trimmed = lines[insertIndex].trimmingCharacters(in: .whitespaces)
+                    if !trimmed.hasPrefix("- ") {
+                        break
+                    }
+                    insertIndex += 1
+                }
+
+                lines.insert(correlationLine, at: insertIndex)
+                return lines.joined(separator: "\n")
+            }
+
+            if let firstLine = lines.first, firstLine.trimmingCharacters(in: .whitespaces).hasPrefix("#") {
+                let insertIndex = (lines.count > 1 && lines[1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ? 2 : 1
+                lines.insert(correlationLine, at: insertIndex)
+                return lines.joined(separator: "\n")
+            }
+
+            return "\(correlationLine)\n\(markdown)"
+        }
+
         private func presentDirectoryPicker() {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -276,6 +476,109 @@ struct WebView: NSViewRepresentable {
                     UserDefaults.standard.set(bookmarkData, forKey: Self.selectedVaultBookmarkDefaultsKey)
                 }
                 self.publishVaultSelection(for: selectedURL)
+            }
+        }
+
+        private func renameVaultFolder(_ payload: [String: Any]) {
+            let nextVaultName = (payload["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            guard !nextVaultName.isEmpty else {
+                publishVaultRenameResult(success: false, errorMessage: "Vault name is required.")
+                return
+            }
+
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+                guard let currentVaultURL = self.resolvePersistedVaultURL() else {
+                    self.publishVaultRenameResult(success: false, errorMessage: "No vault selected.")
+                    return
+                }
+
+                self.withSecurityScopedAccess(to: currentVaultURL) {
+                    do {
+                        let safeVaultName = try self.validateVaultFolderName(nextVaultName)
+                        let parentURL = currentVaultURL.deletingLastPathComponent()
+                        let nextVaultURL = parentURL
+                            .appendingPathComponent(safeVaultName, isDirectory: true)
+                            .standardizedFileURL
+
+                        if nextVaultURL.path == currentVaultURL.standardizedFileURL.path {
+                            self.publishVaultSelection(for: currentVaultURL)
+                            self.publishVaultRenameResult(success: true, errorMessage: nil)
+                            return
+                        }
+
+                        var isDirectory: ObjCBool = false
+                        if self.fileManager.fileExists(atPath: nextVaultURL.path, isDirectory: &isDirectory) {
+                            throw NSError(
+                                domain: "Brain2Native",
+                                code: 1,
+                                userInfo: [NSLocalizedDescriptionKey: "A folder with this name already exists."]
+                            )
+                        }
+
+                        try self.fileManager.moveItem(at: currentVaultURL, to: nextVaultURL)
+
+                        UserDefaults.standard.set(nextVaultURL.path, forKey: Self.selectedVaultPathDefaultsKey)
+                        if let bookmarkData = try? nextVaultURL.bookmarkData(
+                            options: .withSecurityScope,
+                            includingResourceValuesForKeys: nil,
+                            relativeTo: nil
+                        ) {
+                            UserDefaults.standard.set(bookmarkData, forKey: Self.selectedVaultBookmarkDefaultsKey)
+                        } else {
+                            UserDefaults.standard.removeObject(forKey: Self.selectedVaultBookmarkDefaultsKey)
+                        }
+
+                        self.publishVaultSelection(for: nextVaultURL)
+                        self.publishVaultRenameResult(success: true, errorMessage: nil)
+                    } catch {
+                        self.publishVaultRenameResult(success: false, errorMessage: error.localizedDescription)
+                    }
+                }
+            }
+        }
+
+        private func validateVaultFolderName(_ raw: String) throws -> String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Vault name is required."]
+                )
+            }
+
+            if trimmed == "." || trimmed == ".." || trimmed.contains("/") || trimmed.contains("\\") {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Vault name is invalid."]
+                )
+            }
+
+            return trimmed
+        }
+
+        private func publishVaultRenameResult(success: Bool, errorMessage: String?) {
+            var payload: [String: Any] = ["success": success]
+            if let errorMessage, !errorMessage.isEmpty {
+                payload["error"] = errorMessage
+            }
+
+            guard JSONSerialization.isValidJSONObject(payload) else { return }
+            guard
+                let payloadData = try? JSONSerialization.data(withJSONObject: payload),
+                let payloadJSON = String(data: payloadData, encoding: .utf8)
+            else {
+                return
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                let script = """
+                window.dispatchEvent(new CustomEvent('brain2-native-vault-rename-result', { detail: \(payloadJSON) }));
+                """
+                self?.webView?.evaluateJavaScript(script, completionHandler: nil)
             }
         }
 

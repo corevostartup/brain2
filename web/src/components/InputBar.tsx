@@ -87,15 +87,21 @@ type InputBarProps = {
   desktopSidebarOffset?: boolean;
   isSending?: boolean;
   onSend?: (payload: { content: string; model: string; apiKey: string }) => Promise<void>;
+  onOpenAdvancedVoice?: () => void;
 };
 
-export default function InputBar({ desktopSidebarOffset = false, isSending = false, onSend }: InputBarProps) {
+export default function InputBar({
+  desktopSidebarOffset = false,
+  isSending = false,
+  onSend,
+  onOpenAdvancedVoice,
+}: InputBarProps) {
   const [value, setValue] = useState("");
   const [activeMode, setActiveMode] = useState<Mode>("Ask");
   const [activeContextMode, setActiveContextMode] = useState<ContextMode>("Local");
   const [isLlmConfigOpen, setIsLlmConfigOpen] = useState(false);
-  const [llmModel, setLlmModel] = useState(() => loadLlmConfig()?.model ?? "gpt-5.4-mini");
-  const [llmApiKey, setLlmApiKey] = useState(() => loadLlmConfig()?.apiKey ?? "");
+  const [llmModel, setLlmModel] = useState("gpt-5.4-mini");
+  const [llmApiKey, setLlmApiKey] = useState("");
   const [draftModel, setDraftModel] = useState("gpt-5.4-mini");
   const [draftApiKey, setDraftApiKey] = useState("");
   const [llmStatus, setLlmStatus] = useState<"idle" | "error" | "saved">("idle");
@@ -307,6 +313,21 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
             </button>
 
             <button
+              className="icon-btn voice-advanced-btn"
+              aria-label="Fala avancada"
+              title="Fala avancada (em breve)"
+              type="button"
+              onClick={onOpenAdvancedVoice}
+            >
+              <span className="voice-bars" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+                <span />
+              </span>
+            </button>
+
+            <button
               className={`send-btn${canSend ? " send-btn--active" : ""}`}
               onClick={() => {
                 void handleSubmit();
@@ -393,11 +414,11 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
           display: flex;
           justify-content: center;
           width: 100vw;
-          padding: 16px 16px max(28px, env(safe-area-inset-bottom));
+          padding: 44px 16px max(28px, env(safe-area-inset-bottom));
           background: linear-gradient(
             to top,
-            rgba(12, 12, 12, 1) 70%,
-            rgba(12, 12, 12, 0.5) 85%,
+            rgba(12, 12, 12, 1) 68%,
+            rgba(12, 12, 12, 0.55) 84%,
             rgba(12, 12, 12, 0)
           );
           pointer-events: none;
@@ -405,7 +426,37 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
           transition: bottom 0.15s ease-out;
         }
 
+        :global(html[data-theme="light"]) .input-bar-wrapper,
+        :global(body[data-theme="light"]) .input-bar-wrapper {
+          background: linear-gradient(
+            to top,
+            rgba(244, 245, 247, 1) 68%,
+            rgba(244, 245, 247, 0.78) 84%,
+            rgba(244, 245, 247, 0)
+          );
+        }
+
         @media (min-width: 980px) {
+          .input-bar-wrapper {
+            padding: 56px 16px max(28px, env(safe-area-inset-bottom));
+            background: linear-gradient(
+              to top,
+              rgba(12, 12, 12, 1) 62%,
+              rgba(12, 12, 12, 0.55) 80%,
+              rgba(12, 12, 12, 0)
+            );
+          }
+
+          :global(html[data-theme="light"]) .input-bar-wrapper,
+          :global(body[data-theme="light"]) .input-bar-wrapper {
+            background: linear-gradient(
+              to top,
+              rgba(244, 245, 247, 1) 62%,
+              rgba(244, 245, 247, 0.78) 80%,
+              rgba(244, 245, 247, 0)
+            );
+          }
+
           .input-bar-wrapper--with-sidebar {
             left: var(--desktop-sidebar-width);
             right: auto;
@@ -506,6 +557,49 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
           background: rgba(72, 191, 132, 0.12);
         }
 
+        .voice-advanced-btn {
+          padding: 0;
+        }
+
+        .voice-bars {
+          width: 14px;
+          height: 14px;
+          display: inline-flex;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 2px;
+        }
+
+        .voice-bars span {
+          display: block;
+          width: 2px;
+          border-radius: 2px;
+          background: currentColor;
+          opacity: 0.95;
+          transition: transform 0.15s ease, opacity 0.15s ease;
+        }
+
+        .voice-bars span:nth-child(1) {
+          height: 5px;
+        }
+
+        .voice-bars span:nth-child(2) {
+          height: 10px;
+        }
+
+        .voice-bars span:nth-child(3) {
+          height: 7px;
+        }
+
+        .voice-bars span:nth-child(4) {
+          height: 12px;
+        }
+
+        .voice-advanced-btn:hover .voice-bars span {
+          transform: translateY(-1px);
+          opacity: 1;
+        }
+
         /* ── Mode pills ── */
         .mode-selector {
           display: flex;
@@ -515,7 +609,7 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
           border: 1px solid var(--bar-border);
           border-radius: 8px;
           padding: 1px;
-          background: rgba(255, 255, 255, 0.02);
+          background: var(--pill-bg);
         }
 
         .mode-option {
@@ -595,12 +689,12 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
         }
 
         .send-btn--active {
-          background: rgba(255, 255, 255, 0.88);
-          color: #0c0c0c;
+          background: var(--foreground);
+          color: var(--background);
         }
 
         .send-btn--active:hover {
-          background: rgba(255, 255, 255, 1);
+          background: var(--muted-hover);
         }
 
         .send-btn:disabled {
@@ -622,7 +716,7 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
           width: min(460px, 100%);
           border: 1px solid var(--bar-border);
           border-radius: 14px;
-          background: #131313;
+          background: var(--bar-bg);
           padding: 18px;
           display: flex;
           flex-direction: column;
@@ -641,7 +735,7 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
           margin: 0;
           font-family: 'Inter', sans-serif;
           font-size: 12px;
-          color: #707070;
+          color: var(--muted);
           line-height: 1.45;
         }
 
@@ -654,7 +748,7 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
         .llm-field span {
           font-family: 'Inter', sans-serif;
           font-size: 11px;
-          color: #8a8a8a;
+          color: var(--muted);
           letter-spacing: 0.02em;
         }
 
@@ -662,7 +756,7 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
           height: 38px;
           border: 1px solid var(--bar-border);
           border-radius: 10px;
-          background: rgba(255, 255, 255, 0.02);
+          background: var(--pill-bg);
           color: var(--foreground);
           padding: 0 12px;
           font-family: 'Inter', sans-serif;
@@ -713,19 +807,19 @@ export default function InputBar({ desktopSidebarOffset = false, isSending = fal
 
         .llm-btn--primary {
           border: 1px solid var(--bar-border-hover);
-          color: #0c0c0c;
-          background: rgba(255, 255, 255, 0.9);
+          color: var(--background);
+          background: var(--foreground);
           font-weight: 500;
         }
 
         .llm-btn--primary:hover {
-          background: #ffffff;
+          background: var(--muted-hover);
         }
 
         /* ── Mobile ── */
         @media (max-width: 600px) {
           .input-bar-wrapper {
-            padding: 12px 12px 24px;
+            padding: 26px 12px 24px;
           }
 
           .hidden-mobile {

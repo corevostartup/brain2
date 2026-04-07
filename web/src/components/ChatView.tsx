@@ -166,52 +166,55 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
           const visibleContent = isTypingMessage ? typingText : message.content;
 
           return (
-            <article
-              key={message.id}
-              className={`chat-message chat-message--${message.role}`}
-            >
-              <h4>{roleLabel(message.role)}</h4>
-              <p>
-                {visibleContent}
-                {isTypingMessage && <span className="typing-caret" aria-hidden>|</span>}
-              </p>
-              {message.role === "assistant" && (
-                <div className="message-actions" aria-label="Ações da resposta">
-                  <button
-                    className="message-action-btn"
-                    type="button"
-                    onClick={() => copyMessage(message.id, message.content)}
-                    aria-label="Copiar resposta"
-                    title="Copiar resposta"
-                  >
-                    {copiedMessageId === message.id ? <Check size={14} /> : <Copy size={14} />}
-                  </button>
-                  <button
-                    className="message-action-btn message-action-btn--disabled"
-                    type="button"
-                    aria-label="Ouvir resposta (em breve)"
-                    title="Ouvir resposta (em breve)"
-                    disabled
-                  >
-                    <Volume2 size={14} />
-                  </button>
-                </div>
-              )}
-            </article>
+            <div key={message.id} className={`chat-row chat-row--${message.role}`}>
+              <article className={`chat-message chat-message--${message.role}`}>
+                <h4>{roleLabel(message.role)}</h4>
+                <p>
+                  {visibleContent}
+                  {isTypingMessage && <span className="typing-caret" aria-hidden>|</span>}
+                </p>
+                {message.role === "assistant" && (
+                  <div className="message-actions" aria-label="Ações da resposta">
+                    <button
+                      className="message-action-btn"
+                      type="button"
+                      onClick={() => copyMessage(message.id, message.content)}
+                      aria-label="Copiar resposta"
+                      title="Copiar resposta"
+                    >
+                      {copiedMessageId === message.id ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
+                    <button
+                      className="message-action-btn message-action-btn--disabled"
+                      type="button"
+                      aria-label="Ouvir resposta (em breve)"
+                      title="Ouvir resposta (em breve)"
+                      disabled
+                    >
+                      <Volume2 size={14} />
+                    </button>
+                  </div>
+                )}
+              </article>
+            </div>
           );
         })}
 
         {loading && (
-          <article className="chat-message chat-message--assistant">
-            <h4>Brain</h4>
-            <p>Escrevendo resposta...</p>
-          </article>
+          <div className="chat-row chat-row--assistant">
+            <article className="chat-message chat-message--assistant">
+              <h4>Brain</h4>
+              <p>Escrevendo resposta...</p>
+            </article>
+          </div>
         )}
 
         {error && (
-          <article className="chat-error" role="alert">
-            {error}
-          </article>
+          <div className="chat-row chat-row--assistant">
+            <article className="chat-error" role="alert">
+              {error}
+            </article>
+          </div>
         )}
 
         <div ref={endRef} />
@@ -281,15 +284,25 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
           color: #666;
         }
 
+        .chat-row {
+          width: 100%;
+          display: flex;
+          justify-content: flex-start;
+        }
+
+        .chat-row--user {
+          justify-content: flex-end;
+        }
+
         .chat-message {
           width: min(840px, 100%);
           display: flex;
           flex-direction: column;
           gap: 6px;
+          text-align: left;
         }
 
         .chat-message--user {
-          align-self: flex-end;
           text-align: right;
         }
 

@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// Firebase Console → Firestore Database → Regras → cole este conteúdo → Publicar
+// O documento fica em: coleção "users", ID = uid do Auth (não é Realtime Database nem SQL)
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

@@ -1,12 +1,21 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import {
+  onAuthStateChanged,
+  signOut,
+  signInWithPopup,
+  signInWithRedirect,
+  type User,
+} from "firebase/auth";
 import InputBar from "@/components/InputBar";
 import DesktopSidebar from "@/components/DesktopSidebar";
 import BrainGraphView from "@/components/BrainGraphView";
 import ConversationView from "@/components/ConversationView";
 import ChatView from "@/components/ChatView";
 import SettingsView from "@/components/SettingsView";
+import LoginView from "@/components/LoginView";
+import AdvancedVoiceSphereView from "@/components/AdvancedVoiceSphereView";
 import { PanelLeftOpen } from "lucide-react";
 import {
   type VaultConversation,
@@ -14,6 +23,18 @@ import {
   type FolderTreeNode,
 } from "@/lib/vault";
 import type { ChatMessage } from "@/lib/chat";
+import {
+  getFirebaseAuthClient,
+  getFirebaseConfigError,
+  getGoogleAuthProvider,
+} from "@/lib/firebaseClient";
+import {
+  logFirestoreRegistrationError,
+  registerOrUpdateUserInFirestore,
+} from "@/lib/firestoreUser";
+import { loadGoogleDriveVaultFolderConfig } from "@/lib/vaultCloudConfig";
+import { requestGoogleDriveAccessToken } from "@/lib/googleDrive";
+import { loadVaultFromGoogleDriveFolder } from "@/lib/googleDriveVault";
 
 type PresetVaultResponse = {
   path: string;
@@ -21,6 +42,38 @@ type PresetVaultResponse = {
   graph: VaultGraph;
   conversations: VaultConversation[];
 };
+
+type VaultMutationPayload =
+  | {
+      action: "create-folder";
+      parentPath: string;
+      folderName: string;
+    }
+  | {
+      action: "rename-folder";
+      folderPath: string;
+      newFolderName: string;
+    }
+  | {
+      action: "delete-folder";
+      folderPath: string;
+    }
+  | {
+      action: "rename-conversation";
+      conversationPath: string;
+      newTitle: string;
+    }
+  | {
+      action: "delete-conversation";
+      conversationPath: string;
+    }
+  | {
+      action: "save-conversation";
+      conversationId: string;
+      title: string;
+      markdown: string;
+      folderPath?: string;
+    };
 
 type NativeVaultPayload = {
   path?: string;
@@ -36,6 +89,7 @@ type NativeBridge = {
     conversationId: string;
     title: string;
     markdown: string;
+    folderPath?: string;
   }) => void;
 };
 
@@ -69,15 +123,21 @@ function buildChatMarkdown(params: {
   lines.push(`- Model: ${params.model}`);
   lines.push("");
 
+  let nonSystemIndex = 0;
   for (const message of params.messages) {
     if (message.role === "system") {
       continue;
     }
 
-    lines.push(`## ${message.role === "user" ? "User" : "Brain"}`);
+    const roleLabel = message.role === "user" ? "User" : "Brain2";
+    const fallbackTimestamp = params.startedAt + nonSystemIndex * 1000;
+    const messageTimestamp = message.createdAt ?? fallbackTimestamp;
+
+    lines.push(`## ${roleLabel} — ${toIsoDate(messageTimestamp)}`);
     lines.push("");
     lines.push(message.content.trim());
     lines.push("");
+    nonSystemIndex += 1;
   }
 
   return lines.join("\n").trimEnd() + "\n";
@@ -90,6 +150,61 @@ function sanitizeFileName(raw: string): string {
     .replace(/--+/g, "-")
     .replace(/^-+|-+$/g, "");
   return sanitized || "conversation";
+}
+
+function formatConversationFileTitle(raw: string): string {
+  const cleaned = raw
+    .replace(/[._-]+/g, " ")
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) {
+    return "Conversation";
+  }
+
+  return cleaned
+    .split(" ")
+    .map((word) => {
+      const lower = word.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+function createConversationRecordId(seed: string): string {
+  const timestamp = Date.now().toString(36);
+  return `chat-${timestamp}-${seed}`;
+}
+
+function normalizeFolderPath(folderPath: string | null | undefined): string | null {
+  const normalized = (folderPath ?? "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join("/");
+
+  return normalized || null;
+}
+
+function folderPathExists(nodes: FolderTreeNode[], targetPath: string, parentPath = ""): boolean {
+  for (const node of nodes) {
+    if (node.kind !== "folder") {
+      continue;
+    }
+
+    const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+    if (currentPath === targetPath) {
+      return true;
+    }
+
+    if (folderPathExists(node.children, targetPath, currentPath)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function parseWikilinks(content: string): string[] {
@@ -168,10 +283,15 @@ function normalizeGraph(
 }
 
 export default function Home() {
+  const [isAuthInitializing, setIsAuthInitializing] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isYourBrainOpen, setIsYourBrainOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAdvancedVoiceOpen, setIsAdvancedVoiceOpen] = useState(false);
   const [vaultGraph, setVaultGraph] = useState<VaultGraph | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
   const [vaultFolders, setVaultFolders] = useState<FolderTreeNode[]>([]);
@@ -181,13 +301,56 @@ export default function Home() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [returnToYourBrainOnConversationClose, setReturnToYourBrainOnConversationClose] = useState(false);
   const [hasNativeVaultData, setHasNativeVaultData] = useState(false);
+  const [hasCloudVaultData, setHasCloudVaultData] = useState(false);
   const [vaultDataVersion, setVaultDataVersion] = useState(0);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const [chatSessionStartedAt, setChatSessionStartedAt] = useState<number | null>(null);
+  const [chatSessionFolderPath, setChatSessionFolderPath] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
+
+  useEffect(() => {
+    document.body.style.opacity = "1";
+    document.body.style.visibility = "visible";
+    document.body.style.transition = "opacity 120ms ease-out";
+  }, []);
+
+  useEffect(() => {
+    const configError = getFirebaseConfigError();
+    if (configError) {
+      setAuthError(configError);
+      setIsAuthenticated(false);
+      setIsAuthInitializing(false);
+      return;
+    }
+
+    let unsubscribed = false;
+    const auth = getFirebaseAuthClient();
+
+    const unsubscribe = onAuthStateChanged(auth, (user: User | null) => {
+      if (unsubscribed) {
+        return;
+      }
+
+      setAuthUser(user);
+      setIsAuthenticated(Boolean(user));
+      setAuthError(null);
+      setIsAuthInitializing(false);
+
+      if (user) {
+        void registerOrUpdateUserInFirestore(user).catch((err) => {
+          logFirestoreRegistrationError(err);
+        });
+      }
+    });
+
+    return () => {
+      unsubscribed = true;
+      unsubscribe();
+    };
+  }, []);
 
   const selectedConversation = useMemo(
     () => vaultConversations.find((conversation) => conversation.id === selectedConversationId) ?? null,
@@ -201,7 +364,9 @@ export default function Home() {
     return buildChatTitle(chatMessages);
   }, [chatMessages]);
 
-  const activeView = isSettingsOpen
+  const activeView = isAdvancedVoiceOpen
+    ? "advanced-voice"
+    : isSettingsOpen
     ? "settings"
     : isYourBrainOpen
       ? "brain"
@@ -225,17 +390,28 @@ export default function Home() {
       graph?: VaultGraph | null;
       conversations?: VaultConversation[];
     },
-    options?: { markAsNative?: boolean }
+    options?: { markAsNative?: boolean; markAsCloud?: boolean }
   ) => {
+    const nextFolders = data.folders ?? [];
     const nextConversations = data.conversations ?? [];
     const nextGraph = normalizeGraph(data.graph, nextConversations);
 
     setHasNativeVaultData(Boolean(options?.markAsNative));
+    setHasCloudVaultData(Boolean(options?.markAsCloud));
     setVaultPath(data.path ?? "");
-    setVaultFolders(data.folders ?? []);
+    setVaultFolders(nextFolders);
     setVaultGraph(nextGraph);
     setVaultConversations(nextConversations);
-    setSelectedFolderPath(null);
+    setSelectedFolderPath((previous) => {
+      const normalizedPrevious = normalizeFolderPath(previous);
+      if (!normalizedPrevious) {
+        return previous;
+      }
+
+      return folderPathExists(nextFolders, normalizedPrevious)
+        ? normalizedPrevious
+        : null;
+    });
     setSelectedConversationId(null);
     setReturnToYourBrainOnConversationClose(false);
     setGraphLoading(false);
@@ -249,6 +425,37 @@ export default function Home() {
 
     setGraphLoading(true);
     try {
+      const cloudConfig = loadGoogleDriveVaultFolderConfig();
+      if (cloudConfig) {
+        let cloudLoaded = false;
+        for (const interactive of [false, true] as const) {
+          try {
+            const token = await requestGoogleDriveAccessToken(interactive);
+            const data = await loadVaultFromGoogleDriveFolder(
+              cloudConfig.folderId,
+              token,
+              cloudConfig.label
+            );
+            applyVaultData(
+              {
+                path: data.path,
+                folders: data.folders,
+                graph: data.graph,
+                conversations: data.conversations,
+              },
+              { markAsNative: false, markAsCloud: true }
+            );
+            cloudLoaded = true;
+            break;
+          } catch {
+            /* tenta token interativo ou cai para preset */
+          }
+        }
+        if (cloudLoaded) {
+          return;
+        }
+      }
+
       const response = await fetch("/api/vault", { cache: "no-store" });
       if (!response.ok) {
         throw new Error("Falha ao carregar vault preset");
@@ -261,7 +468,7 @@ export default function Home() {
           graph: data.graph,
           conversations: data.conversations,
         },
-        { markAsNative: false }
+        { markAsNative: false, markAsCloud: false }
       );
     } catch {
       applyVaultData(
@@ -271,16 +478,24 @@ export default function Home() {
           graph: null,
           conversations: [],
         },
-        { markAsNative: false }
+        { markAsNative: false, markAsCloud: false }
       );
     }
   }, [hasNativeVaultData, applyVaultData]);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
     void loadPresetVaultData();
-  }, [loadPresetVaultData]);
+  }, [isAuthenticated, loadPresetVaultData]);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
     const applyNativePayload = (payload?: NativeVaultPayload) => {
       if (!payload) return;
       applyVaultData(
@@ -290,7 +505,7 @@ export default function Home() {
           graph: payload.graph,
           conversations: payload.conversations,
         },
-        { markAsNative: true }
+        { markAsNative: true, markAsCloud: false }
       );
     };
 
@@ -309,7 +524,7 @@ export default function Home() {
     return () => {
       window.removeEventListener("brain2-native-vault-selected", handleNativeVaultSelection);
     };
-  }, [applyVaultData]);
+  }, [applyVaultData, isAuthenticated]);
 
   useEffect(() => {
     if (selectedConversationId && !selectedConversation) {
@@ -321,16 +536,243 @@ export default function Home() {
   const handleOpenBrain = useCallback(async () => {
     setIsChatOpen(false);
     setIsSettingsOpen(false);
+    setIsAdvancedVoiceOpen(false);
     setIsYourBrainOpen(true);
-    if (!hasNativeVaultData) {
+    if (!hasNativeVaultData && !hasCloudVaultData) {
       await loadPresetVaultData();
     }
-  }, [hasNativeVaultData, loadPresetVaultData]);
+  }, [hasNativeVaultData, hasCloudVaultData, loadPresetVaultData]);
+
+  const handleOpenAdvancedVoice = useCallback(() => {
+    setIsChatOpen(false);
+    setIsSettingsOpen(false);
+    setIsYourBrainOpen(false);
+    setSelectedConversationId(null);
+    setReturnToYourBrainOnConversationClose(false);
+    setIsAdvancedVoiceOpen(true);
+  }, []);
 
   const handleVaultChange = useCallback(() => {
     setHasNativeVaultData(false);
+    setHasCloudVaultData(false);
     void loadPresetVaultData({ force: true });
   }, [loadPresetVaultData]);
+
+  const mutatePresetVaultData = useCallback(async (
+    payload: VaultMutationPayload
+  ): Promise<PresetVaultResponse | null> => {
+    setGraphLoading(true);
+    try {
+      const response = await fetch("/api/vault", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = (await response.json()) as PresetVaultResponse & { error?: string };
+      if (!response.ok) {
+        throw new Error(data.error || "Falha ao atualizar item no vault.");
+      }
+
+      applyVaultData(
+        {
+          path: data.path,
+          folders: data.folders,
+          graph: data.graph,
+          conversations: data.conversations,
+        },
+        { markAsNative: false, markAsCloud: false }
+      );
+
+      return data;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Erro inesperado ao atualizar o vault.";
+      window.alert(message);
+      return null;
+    } finally {
+      setGraphLoading(false);
+    }
+  }, [applyVaultData]);
+
+  const handleCreateFolder = useCallback(async (parentPath: string, folderName: string) => {
+    if (hasNativeVaultData || hasCloudVaultData) {
+      window.alert(
+        hasCloudVaultData
+          ? "Nova pasta ainda nao esta disponivel para o vault no Google Drive (somente leitura)."
+          : "Nova pasta via menu lateral ainda nao esta disponivel para o vault nativo."
+      );
+      return;
+    }
+
+    const safeFolderName = folderName.trim();
+    if (!safeFolderName) {
+      return;
+    }
+
+    if (safeFolderName.includes("/") || safeFolderName.includes("\\")) {
+      window.alert("O nome da pasta nao pode conter / ou \\\\.");
+      return;
+    }
+
+    const result = await mutatePresetVaultData({
+      action: "create-folder",
+      parentPath,
+      folderName: safeFolderName,
+    });
+
+    if (!result) {
+      throw new Error("create-folder-failed");
+    }
+
+    const nextSelectedPath = parentPath ? `${parentPath}/${safeFolderName}` : safeFolderName;
+    setSelectedFolderPath(nextSelectedPath);
+  }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData]);
+
+  const handleDeleteFolder = useCallback(async (folderPath: string) => {
+    if (hasNativeVaultData || hasCloudVaultData) {
+      window.alert(
+        hasCloudVaultData
+          ? "Excluir pasta ainda nao esta disponivel para o vault no Google Drive (somente leitura)."
+          : "Excluir pasta via menu lateral ainda nao esta disponivel para o vault nativo."
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Excluir a pasta \"${folderPath}\" e todo o conteudo dela? Esta acao nao pode ser desfeita.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const result = await mutatePresetVaultData({
+      action: "delete-folder",
+      folderPath,
+    });
+
+    if (
+      result &&
+      selectedFolderPath &&
+      (selectedFolderPath === folderPath || selectedFolderPath.startsWith(`${folderPath}/`))
+    ) {
+      setSelectedFolderPath(null);
+    }
+  }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData, selectedFolderPath]);
+
+  const handleRenameFolder = useCallback(async (folderPath: string, nextFolderNameRaw: string) => {
+    if (hasNativeVaultData || hasCloudVaultData) {
+      window.alert(
+        hasCloudVaultData
+          ? "Renomear pasta ainda nao esta disponivel para o vault no Google Drive (somente leitura)."
+          : "Renomear pasta via menu lateral ainda nao esta disponivel para o vault nativo."
+      );
+      return;
+    }
+
+    const nextFolderName = nextFolderNameRaw.trim();
+    if (!nextFolderName) {
+      return;
+    }
+
+    if (nextFolderName.includes("/") || nextFolderName.includes("\\")) {
+      window.alert("O nome da pasta nao pode conter / ou \\\\.");
+      return;
+    }
+
+    const normalizedFolderPath = folderPath.replace(/\\/g, "/");
+    const slashIndex = normalizedFolderPath.lastIndexOf("/");
+    const parentPrefix = slashIndex >= 0 ? `${normalizedFolderPath.slice(0, slashIndex + 1)}` : "";
+    const renamedFolderPath = `${parentPrefix}${nextFolderName}`;
+
+    const result = await mutatePresetVaultData({
+      action: "rename-folder",
+      folderPath,
+      newFolderName: nextFolderName,
+    });
+
+    if (!result) {
+      throw new Error("rename-folder-failed");
+    }
+
+    setSelectedFolderPath((previous) => {
+      if (!previous) {
+        return previous;
+      }
+
+      if (previous === normalizedFolderPath) {
+        return renamedFolderPath;
+      }
+
+      if (previous.startsWith(`${normalizedFolderPath}/`)) {
+        return `${renamedFolderPath}${previous.slice(normalizedFolderPath.length)}`;
+      }
+
+      return previous;
+    });
+  }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData]);
+
+  const handleRenameConversation = useCallback(async (conversationPath: string, nextTitleRaw: string) => {
+    if (hasNativeVaultData || hasCloudVaultData) {
+      window.alert(
+        hasCloudVaultData
+          ? "Renomear conversa ainda nao esta disponivel para o vault no Google Drive (somente leitura)."
+          : "Renomear conversa via menu lateral ainda nao esta disponivel para o vault nativo."
+      );
+      return;
+    }
+
+    const nextTitle = nextTitleRaw.trim();
+    if (!nextTitle) {
+      return;
+    }
+
+    if (nextTitle.includes("/") || nextTitle.includes("\\")) {
+      window.alert("O nome da conversa nao pode conter / ou \\\\.");
+      return;
+    }
+
+    const result = await mutatePresetVaultData({
+      action: "rename-conversation",
+      conversationPath,
+      newTitle: nextTitle,
+    });
+
+    if (result && selectedConversationId === conversationPath.toLowerCase()) {
+      const normalizedPath = conversationPath.replace(/\\/g, "/");
+      const slashIndex = normalizedPath.lastIndexOf("/");
+      const baseDir = slashIndex >= 0 ? normalizedPath.slice(0, slashIndex + 1) : "";
+      setSelectedConversationId(`${baseDir}${nextTitle}.md`.toLowerCase());
+    }
+  }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData, selectedConversationId]);
+
+  const handleDeleteConversation = useCallback(async (conversationPath: string, conversationTitle: string) => {
+    if (hasNativeVaultData || hasCloudVaultData) {
+      window.alert(
+        hasCloudVaultData
+          ? "Excluir conversa ainda nao esta disponivel para o vault no Google Drive (somente leitura)."
+          : "Excluir conversa via menu lateral ainda nao esta disponivel para o vault nativo."
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Excluir a conversa \"${conversationTitle}\"? Esta acao nao pode ser desfeita.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const result = await mutatePresetVaultData({
+      action: "delete-conversation",
+      conversationPath,
+    });
+
+    if (result && selectedConversationId === conversationPath.toLowerCase()) {
+      setSelectedConversationId(null);
+    }
+  }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData, selectedConversationId]);
 
   const handleConversationSelect = useCallback((
     conversation: VaultConversation,
@@ -339,6 +781,7 @@ export default function Home() {
     setIsChatOpen(false);
     setIsSettingsOpen(false);
     setIsYourBrainOpen(false);
+    setIsAdvancedVoiceOpen(false);
     setSelectedConversationId(conversation.id);
     setReturnToYourBrainOnConversationClose(Boolean(options?.fromYourBrain));
   }, []);
@@ -370,6 +813,7 @@ export default function Home() {
     startedAt: number;
     model: string;
     messages: ChatMessage[];
+    folderPath?: string | null;
   }) => {
     const title = buildChatTitle(params.messages);
     const markdown = buildChatMarkdown({
@@ -379,9 +823,12 @@ export default function Home() {
       messages: params.messages,
     });
 
-    const safeConversationID = sanitizeFileName(params.sessionId);
-    const safeTitle = sanitizeFileName(title);
-    const memoryPath = `Brain2Memories/${safeConversationID}-${safeTitle}.md`;
+    const conversationRecordId = `${params.sessionId}-${params.startedAt}`;
+    const safeConversationID = sanitizeFileName(conversationRecordId);
+    const formattedTitle = formatConversationFileTitle(title);
+    const normalizedFolderPath = normalizeFolderPath(params.folderPath);
+    const targetFolderPath = normalizedFolderPath ?? "Brain2Memories";
+    const memoryPath = `${targetFolderPath}/${formattedTitle} - (${safeConversationID}).md`;
     const optimisticConversation: VaultConversation = {
       id: memoryPath.toLowerCase(),
       title,
@@ -391,33 +838,64 @@ export default function Home() {
     };
 
     setVaultConversations((previous) => {
-      const next = previous.filter((conversation) => conversation.id !== optimisticConversation.id);
+      const targetFolderPrefix = `${targetFolderPath}/`.toLowerCase();
+      const conversationPathMetadataSuffix = ` - (${safeConversationID}).md`.toLowerCase();
+      const conversationPathLegacySuffix = `--${safeConversationID}.md`.toLowerCase();
+      const legacyConversationPathPrefix = `${targetFolderPath}/${safeConversationID}-`.toLowerCase();
+      const next = previous.filter(
+        (conversation) => {
+          const normalizedPath = conversation.path.toLowerCase();
+          const isSameFolder = normalizedPath.startsWith(targetFolderPrefix);
+          const isSameByCurrentPattern = normalizedPath.endsWith(conversationPathMetadataSuffix);
+          const isSameByPreviousPattern = normalizedPath.endsWith(conversationPathLegacySuffix);
+          const isSameByLegacyPattern = normalizedPath.startsWith(legacyConversationPathPrefix);
+
+          return !(isSameFolder && (isSameByCurrentPattern || isSameByPreviousPattern || isSameByLegacyPattern));
+        }
+      );
       return [optimisticConversation, ...next].sort((a, b) => b.modifiedAt - a.modifiedAt);
     });
 
     const bridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
-    if (!bridge?.saveConversation) return;
+    if (bridge?.saveConversation) {
+      bridge.saveConversation({
+        conversationId: conversationRecordId,
+        title,
+        markdown,
+        folderPath: normalizedFolderPath ?? undefined,
+      });
+      return;
+    }
 
-    bridge.saveConversation({
-      conversationId: params.sessionId,
+    if (hasNativeVaultData || hasCloudVaultData) {
+      return;
+    }
+
+    void mutatePresetVaultData({
+      action: "save-conversation",
+      conversationId: conversationRecordId,
       title,
       markdown,
+      folderPath: normalizedFolderPath ?? undefined,
     });
-  }, []);
+  }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData]);
 
   const handleSendToBrain = useCallback(async (payload: { content: string; model: string; apiKey: string }) => {
     setIsChatOpen(true);
-    const sessionId = chatSessionId ?? createMessageId();
+    const targetFolderPathForConversation = normalizeFolderPath(chatSessionFolderPath ?? selectedFolderPath);
+    const sessionId = chatSessionId ?? createConversationRecordId(createMessageId());
     const startedAt = chatSessionStartedAt ?? Date.now();
     if (!chatSessionId) {
       setChatSessionId(sessionId);
       setChatSessionStartedAt(startedAt);
+      setChatSessionFolderPath(targetFolderPathForConversation);
     }
 
     const userMessage: ChatMessage = {
       id: createMessageId(),
       role: "user",
       content: payload.content,
+      createdAt: Date.now(),
     };
 
     const requestMessages: ChatMessage[] = [...chatMessages, userMessage];
@@ -426,7 +904,6 @@ export default function Home() {
     setChatError(null);
     setIsSettingsOpen(false);
     setIsYourBrainOpen(false);
-    setSelectedFolderPath(null);
     setSelectedConversationId(null);
     setReturnToYourBrainOnConversationClose(false);
     setChatLoading(true);
@@ -463,6 +940,7 @@ export default function Home() {
           id: createMessageId(),
           role: "assistant" as const,
           content: assistantText,
+          createdAt: Date.now(),
         },
       ];
       setChatMessages(nextMessages);
@@ -471,6 +949,7 @@ export default function Home() {
         startedAt,
         model: payload.model,
         messages: nextMessages,
+        folderPath: targetFolderPathForConversation,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro inesperado ao gerar resposta.";
@@ -482,15 +961,25 @@ export default function Home() {
         startedAt,
         model: payload.model,
         messages: requestMessages,
+        folderPath: targetFolderPathForConversation,
       });
     } finally {
       setChatLoading(false);
     }
-  }, [chatMessages, chatSessionId, chatSessionStartedAt, createMessageId, persistChatConversation]);
+  }, [
+    chatMessages,
+    chatSessionFolderPath,
+    chatSessionId,
+    chatSessionStartedAt,
+    createMessageId,
+    persistChatConversation,
+    selectedFolderPath,
+  ]);
 
   const handleNewConversation = useCallback(() => {
     setIsSettingsOpen(false);
     setIsYourBrainOpen(false);
+    setIsAdvancedVoiceOpen(false);
     setSelectedConversationId(null);
     setReturnToYourBrainOnConversationClose(false);
     setChatMessages([]);
@@ -498,8 +987,61 @@ export default function Home() {
     setChatLoading(false);
     setChatSessionId(null);
     setChatSessionStartedAt(null);
+    setChatSessionFolderPath(null);
     setIsChatOpen(true);
   }, []);
+
+  const handleLogin = useCallback(async () => {
+    const configError = getFirebaseConfigError();
+    if (configError) {
+      setAuthError(configError);
+      throw new Error(configError);
+    }
+
+    const auth = getFirebaseAuthClient();
+    const provider = getGoogleAuthProvider();
+
+    try {
+      setAuthError(null);
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      const authIssue = error as { code?: string; message?: string };
+
+      if (authIssue.code === "auth/popup-blocked") {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+
+      if (authIssue.code === "auth/popup-closed-by-user") {
+        setAuthError("Login cancelado antes da confirmacao.");
+        return;
+      }
+
+      if (authIssue.code === "auth/operation-not-allowed") {
+        setAuthError("Ative Google como provedor em Firebase Authentication > Sign-in method.");
+        return;
+      }
+
+      setAuthError(authIssue.message || "Falha ao autenticar com Google.");
+      throw error;
+    }
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      const auth = getFirebaseAuthClient();
+      await signOut(auth);
+      setAuthError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao sair da conta.";
+      setAuthError(message);
+      window.alert("Nao foi possivel fazer logout agora. Tente novamente.");
+    }
+  }, []);
+
+  if (isAuthInitializing || !isAuthenticated) {
+    return <LoginView onLogin={handleLogin} authLoading={isAuthInitializing} authError={authError} />;
+  }
 
   return (
     <main
@@ -522,13 +1064,27 @@ export default function Home() {
           onHide={() => setIsSidebarHidden(true)}
           onNewConversation={handleNewConversation}
           onYourBrain={handleOpenBrain}
-          onSettings={() => { setIsChatOpen(false); setIsYourBrainOpen(false); setIsSettingsOpen(true); }}
+          onLogout={handleLogout}
+          userName={authUser?.displayName || authUser?.email}
+          userPhotoURL={authUser?.photoURL}
+          onSettings={() => {
+            setIsChatOpen(false);
+            setIsYourBrainOpen(false);
+            setIsAdvancedVoiceOpen(false);
+            setIsSettingsOpen(true);
+          }}
+          vaultLoading={graphLoading}
           vaultFolders={vaultFolders}
           vaultConversations={vaultConversations}
           selectedFolderPath={selectedFolderPath}
           onFolderSelect={setSelectedFolderPath}
           selectedConversationId={selectedConversationId}
           onConversationSelect={handleConversationSelect}
+          onCreateFolder={handleCreateFolder}
+          onRenameFolder={handleRenameFolder}
+          onDeleteFolder={handleDeleteFolder}
+          onRenameConversation={handleRenameConversation}
+          onDeleteConversation={handleDeleteConversation}
         />
       )}
 
@@ -543,13 +1099,18 @@ export default function Home() {
             setIsMobileSidebarOpen(false);
             handleOpenBrain();
           }}
+          onLogout={handleLogout}
+          userName={authUser?.displayName || authUser?.email}
+          userPhotoURL={authUser?.photoURL}
           onSettings={() => {
             setIsMobileSidebarOpen(false);
             setIsChatOpen(false);
             setIsYourBrainOpen(false);
+            setIsAdvancedVoiceOpen(false);
             setIsSettingsOpen(true);
           }}
           mobileFullscreen
+          vaultLoading={graphLoading}
           vaultFolders={vaultFolders}
           vaultConversations={vaultConversations}
           selectedFolderPath={selectedFolderPath}
@@ -559,6 +1120,11 @@ export default function Home() {
             setIsMobileSidebarOpen(false);
             handleConversationSelect(conversation);
           }}
+          onCreateFolder={handleCreateFolder}
+          onRenameFolder={handleRenameFolder}
+          onDeleteFolder={handleDeleteFolder}
+          onRenameConversation={handleRenameConversation}
+          onDeleteConversation={handleDeleteConversation}
         />
       )}
 
@@ -616,6 +1182,8 @@ export default function Home() {
             loading={chatLoading}
             error={chatError}
           />
+        ) : activeView === "advanced-voice" ? (
+          <AdvancedVoiceSphereView onClose={() => setIsAdvancedVoiceOpen(false)} />
         ) : activeView === "conversation" && selectedConversation ? (
           <ConversationView
             conversation={selectedConversation}
@@ -627,6 +1195,9 @@ export default function Home() {
             onVaultChange={handleVaultChange}
             vaultHandle={null}
             nativeVaultPath={vaultPath}
+            onCloudVaultSaved={() => {
+              void loadPresetVaultData({ force: true });
+            }}
           />
         ) : (
           <>
@@ -637,7 +1208,7 @@ export default function Home() {
                 fontWeight: 500,
                 letterSpacing: "0.1em",
                 textTransform: "uppercase",
-                color: "#d4d4d4",
+                color: "var(--hero-title)",
                 margin: 0,
               }}
             >
@@ -650,7 +1221,7 @@ export default function Home() {
                 fontWeight: 300,
                 letterSpacing: "0.22em",
                 textTransform: "uppercase",
-                color: "#464646",
+                color: "var(--hero-subtitle)",
                 margin: 0,
               }}
             >
@@ -666,6 +1237,7 @@ export default function Home() {
           desktopSidebarOffset={!isSidebarHidden}
           isSending={chatLoading}
           onSend={handleSendToBrain}
+          onOpenAdvancedVoice={handleOpenAdvancedVoice}
         />
       )}
 

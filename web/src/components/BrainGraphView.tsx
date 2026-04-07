@@ -1,40 +1,48 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useMemo } from "react";
-import cytoscape, { type Core, type EventObject, type NodeSingular } from "cytoscape";
+import dynamic from "next/dynamic";
+import type { ComponentType, MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X, Loader2 } from "lucide-react";
 import type { VaultGraph } from "@/lib/vault";
+import { forceCenter, forceX, forceY } from "d3-force-3d";
+import type {
+  ForceGraphMethods,
+  GraphData,
+  LinkObject,
+  NodeObject,
+} from "react-force-graph-2d";
 
-// ── Force simulation config ────────────────────────────────────────────
-const FORCE_CFG = {
-  repulsion: 6000,      // Coulomb repulsion strength
-  attraction: 0.012,    // Spring attraction along edges
-  baseIdealLength: 95,
-  degreeIdealBoost: 22,
-  degreeMismatchLengthBoost: 3.2,
-  springStretchCap: 240,
-  gravity: 0.04,        // Pull toward center
-  damping: 0.82,        // Velocity damping per frame
-  minVelocity: 0.02,    // Below this, node is "at rest"
-  maxVelocity: 20,      // Cap velocity per frame
-  cooldownTicks: 600,   // Auto-stop after N idle ticks
-  dragBoost: 3.0,       // Extra attraction multiplier during drag
-  dragImpulse: 0.75,    // Velocity impulse from dragged node to neighbors
-  dragPropagationDepth: 4,
-  dragPropagationDecay: 0.62,
-  dragPositionCarry: 0.42,
-  dragNeighborSpring: 0.095,
-  dragVelocitySmoothing: 0.28,
-  dragMomentumScale: 14,
-  dragReleaseBoost: 1.8,
-  dragReleaseMaxImpulse: 6.5,
-};
+const ForceGraph2D = dynamic(
+  () => import("react-force-graph-2d").then((m) => m.default),
+  { ssr: false, loading: () => null }
+) as ComponentType<
+  Record<string, unknown> & { ref?: MutableRefObject<ForceGraphMethods | undefined> }
+>;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-// ── Mock data: interconnected notes/files ──────────────────────────────
+// Física estilo “organismo”: molas + repulsão + inércia (via d3) + simulação mais longa
+const PHYSICS = {
+  chargeStrength: -320,
+  velocityDecay: 0.28,
+  alphaDecay: 0.011,
+  alphaMin: 0.006,
+  baseLinkDistance: 92,
+  degreeDistanceBoost: 20,
+  degreeMismatchBoost: 3,
+  linkStrengthMin: 0.35,
+  linkStrengthMax: 0.95,
+  warmupTicks: 140,
+  cooldownMs: 22000,
+  /** Ancora o conjunto no centro do espaço do grafo (0,0); o utilizador continua a poder pan/zoom na vista. */
+  centerStrength: 1,
+  pullToOriginStrength: 0.045,
+};
+
+// ── Mock data ─────────────────────────────────────────────────────────
 const mockNodes = [
   { id: "brain2", label: "Brain2 Project", group: "project" },
   { id: "arch", label: "Arquitetura do Sistema", group: "tech" },
@@ -127,22 +135,24 @@ const mockEdges = [
   { source: "search-engine", target: "memory" },
 ];
 
-// ── Color palette by group ─────────────────────────────────────────────
 const GROUP_COLORS: Record<string, string> = {
-  project: "#7c6ef0",
-  tech: "#4ea8de",
-  product: "#48bf84",
-  business: "#e8a838",
-  notes: "#888888",
+  project: "#c0c0c0",
+  tech: "#b6b6b6",
+  product: "#adadad",
+  business: "#c8c8c8",
+  notes: "#9e9e9e",
 };
 
 const GROUP_COLORS_DIM: Record<string, string> = {
-  project: "#3b3570",
-  tech: "#264f6a",
-  product: "#24603f",
-  business: "#6e5020",
-  notes: "#404040",
+  project: "#4f4f4f",
+  tech: "#4a4a4a",
+  product: "#474747",
+  business: "#525252",
+  notes: "#3d3d3d",
 };
+
+const VAULT_NODE_COLOR = "#b8b8b8";
+const VAULT_NODE_COLOR_DIM = "#4a4a4a";
 
 type BrainGraphViewProps = {
   onClose: () => void;
@@ -151,648 +161,343 @@ type BrainGraphViewProps = {
   onOpenConversationFromNode?: (nodeId: string, nodeLabel: string) => void;
 };
 
-// Single color for vault-sourced nodes
-const VAULT_NODE_COLOR = "#4ea8de";
-const VAULT_NODE_COLOR_DIM = "#264f6a";
+type BrainNode = {
+  id: string;
+  name: string;
+  group: string;
+  val: number;
+};
 
-export default function BrainGraphView({ onClose, graph, loading, onOpenConversationFromNode }: BrainGraphViewProps) {
+type BrainLink = {
+  source: string;
+  target: string;
+  distance: number;
+  strength: number;
+};
+
+function linkKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+function nodeIdOf(n: unknown): string {
+  if (n && typeof n === "object" && "id" in n && typeof (n as { id: unknown }).id === "string") {
+    return (n as { id: string }).id;
+  }
+  return String(n);
+}
+
+/** Igual a `nodeRelSize` no ForceGraph2D — usado para posicionar o rótulo abaixo do círculo. */
+const NODE_REL_SIZE = 5;
+
+function truncateCanvasLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string {
+  if (maxWidth <= 0) return "";
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  const ell = "…";
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const slice = text.slice(0, mid) + ell;
+    if (ctx.measureText(slice).width <= maxWidth) lo = mid;
+    else hi = mid - 1;
+  }
+  return (lo > 0 ? text.slice(0, lo) : "") + ell;
+}
+
+export default function BrainGraphView({
+  onClose,
+  graph,
+  loading,
+  onOpenConversationFromNode,
+}: BrainGraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const cyRef = useRef<Core | null>(null);
-  const rafRef = useRef<number>(0);
-  const velocities = useRef<Record<string, { vx: number; vy: number }>>({});
-  const grabbedNode = useRef<string | null>(null);
-  const dragLastPos = useRef<{ x: number; y: number } | null>(null);
-  const dragMomentum = useRef<{ vx: number; vy: number; ts: number } | null>(null);
-  const dragStartPos = useRef<{ x: number; y: number } | null>(null);
-  const suppressNodeTapUntil = useRef(0);
-  const simulationActive = useRef(true);
+  const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
 
-  const collectInfluencedNodes = useCallback((cy: Core, sourceId: string) => {
-    const visited = new Set<string>([sourceId]);
-    let frontier = [sourceId];
-    let depth = 1;
+  const [dims, setDims] = useState({ w: 640, h: 480 });
+  const [hoverId, setHoverId] = useState<string | null>(null);
+  const [highlightLinks, setHighlightLinks] = useState<Set<string>>(new Set());
+  const fitDoneKey = useRef<string>("");
+  const dragAccumRef = useRef(0);
+  const suppressClickUntil = useRef(0);
 
-    const influenced: Array<{ id: string; influence: number }> = [];
-
-    while (frontier.length > 0 && depth <= FORCE_CFG.dragPropagationDepth) {
-      const nextFrontier: string[] = [];
-
-      for (const id of frontier) {
-        const node = cy.getElementById(id);
-        if (node.empty()) continue;
-
-        node.connectedEdges().forEach((edge) => {
-          const neighborId = edge.source().id() === id ? edge.target().id() : edge.source().id();
-          if (visited.has(neighborId)) return;
-
-          visited.add(neighborId);
-          nextFrontier.push(neighborId);
-          influenced.push({
-            id: neighborId,
-            influence: FORCE_CFG.dragImpulse * Math.pow(FORCE_CFG.dragPropagationDecay, depth - 1),
-          });
-        });
-      }
-
-      frontier = nextFrontier;
-      depth += 1;
-    }
-
-    return influenced;
-  }, []);
-
-  const applyDragPropagation = useCallback((
-    cy: Core,
-    sourceId: string,
-    dx: number,
-    dy: number,
-    momentum: { vx: number; vy: number }
-  ) => {
-    const deltaMagnitude = Math.hypot(dx, dy);
-    if (!Number.isFinite(deltaMagnitude) || deltaMagnitude < 0.001) return;
-
-    const vels = velocities.current;
-    const influenced = collectInfluencedNodes(cy, sourceId);
-
-    if (influenced.length === 0) return;
-
-    const momentumX = momentum.vx * FORCE_CFG.dragMomentumScale;
-    const momentumY = momentum.vy * FORCE_CFG.dragMomentumScale;
-
-    cy.batch(() => {
-      for (const target of influenced) {
-        if (target.id === grabbedNode.current) continue;
-
-        const node = cy.getElementById(target.id);
-        if (node.empty()) continue;
-
-        const velocity = vels[target.id] ?? { vx: 0, vy: 0 };
-        velocity.vx += (dx + momentumX) * target.influence;
-        velocity.vy += (dy + momentumY) * target.influence;
-        vels[target.id] = velocity;
-
-        const position = node.position();
-        node.position({
-          x: position.x + dx * target.influence * FORCE_CFG.dragPositionCarry,
-          y: position.y + dy * target.influence * FORCE_CFG.dragPositionCarry,
-        });
-      }
-    });
-  }, [collectInfluencedNodes]);
-
-  const applyReleaseInertia = useCallback((cy: Core, sourceId: string, vx: number, vy: number) => {
-    const vels = velocities.current;
-    const influenced = collectInfluencedNodes(cy, sourceId);
-    if (influenced.length === 0) return;
-
-    const releaseVX = clamp(vx * FORCE_CFG.dragMomentumScale * FORCE_CFG.dragReleaseBoost, -FORCE_CFG.dragReleaseMaxImpulse, FORCE_CFG.dragReleaseMaxImpulse);
-    const releaseVY = clamp(vy * FORCE_CFG.dragMomentumScale * FORCE_CFG.dragReleaseBoost, -FORCE_CFG.dragReleaseMaxImpulse, FORCE_CFG.dragReleaseMaxImpulse);
-
-    for (const target of influenced) {
-      const velocity = vels[target.id] ?? { vx: 0, vy: 0 };
-      velocity.vx += releaseVX * target.influence;
-      velocity.vy += releaseVY * target.influence;
-      vels[target.id] = velocity;
-    }
-  }, [collectInfluencedNodes]);
-
-  const runForceSimulation = useCallback((cy: Core) => {
-    const nodes = cy.nodes();
-    const edges = cy.edges();
-    const vels = velocities.current;
-
-    // Initialize velocities
-    nodes.forEach((n) => {
-      if (!vels[n.id()]) vels[n.id()] = { vx: 0, vy: 0 };
-    });
-
-    let idleTicks = 0;
-
-    const tick = () => {
-      if (!simulationActive.current) return;
-
-      const posMap: Record<string, { x: number; y: number }> = {};
-      nodes.forEach((n) => {
-        const pos = n.position();
-        posMap[n.id()] = { x: pos.x, y: pos.y };
-      });
-
-      // Center of mass
-      let cx = 0, cy2 = 0;
-      nodes.forEach((n) => { cx += posMap[n.id()].x; cy2 += posMap[n.id()].y; });
-      cx /= nodes.length;
-      cy2 /= nodes.length;
-
-      // Reset forces
-      const forces: Record<string, { fx: number; fy: number }> = {};
-      nodes.forEach((n) => { forces[n.id()] = { fx: 0, fy: 0 }; });
-
-      // Repulsion (all pairs)
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const a = nodes[i], b = nodes[j];
-          const pa = posMap[a.id()], pb = posMap[b.id()];
-          const dx = pa.x - pb.x;
-          const dy = pa.y - pb.y;
-          let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          if (dist < 10) dist = 10;
-          const f = FORCE_CFG.repulsion / (dist * dist);
-          const fx = (dx / dist) * f;
-          const fy = (dy / dist) * f;
-          forces[a.id()].fx += fx;
-          forces[a.id()].fy += fy;
-          forces[b.id()].fx -= fx;
-          forces[b.id()].fy -= fy;
-        }
-      }
-
-      // Attraction (edges) — boosted when dragging
-      const isDragging = grabbedNode.current !== null;
-      const attractionK = isDragging
-        ? FORCE_CFG.attraction * FORCE_CFG.dragBoost
-        : FORCE_CFG.attraction;
-
-      edges.forEach((e) => {
-        const src = e.source().id();
-        const tgt = e.target().id();
-        const pa = posMap[src], pb = posMap[tgt];
-        const dx = pb.x - pa.x;
-        const dy = pb.y - pa.y;
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const edgeWeight = Number(e.data("weight")) || 1;
-        const idealLength = Number(e.data("idealLength")) || FORCE_CFG.baseIdealLength;
-        const stretch = clamp(
-          dist - idealLength,
-          -FORCE_CFG.springStretchCap,
-          FORCE_CFG.springStretchCap
-        );
-        const f = stretch * attractionK * edgeWeight;
-        forces[src].fx += (dx / dist) * f;
-        forces[src].fy += (dy / dist) * f;
-        forces[tgt].fx -= (dx / dist) * f;
-        forces[tgt].fy -= (dy / dist) * f;
-      });
-
-      // While dragging, pull first-order neighbors directly as springs from dragged node.
-      if (isDragging && grabbedNode.current) {
-        const draggedId = grabbedNode.current;
-        const draggedPos = posMap[draggedId];
-        const draggedNode = cy.getElementById(draggedId);
-
-        if (draggedPos && !draggedNode.empty()) {
-          draggedNode.connectedEdges().forEach((edge) => {
-            const neighborId = edge.source().id() === draggedId ? edge.target().id() : edge.source().id();
-            const neighborPos = posMap[neighborId];
-            if (!neighborPos || !forces[neighborId]) return;
-
-            const dx = draggedPos.x - neighborPos.x;
-            const dy = draggedPos.y - neighborPos.y;
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-            const idealLength = Number(edge.data("idealLength")) || FORCE_CFG.baseIdealLength;
-            const edgeWeight = Number(edge.data("weight")) || 1;
-            const stretch = clamp(
-              dist - idealLength,
-              -FORCE_CFG.springStretchCap,
-              FORCE_CFG.springStretchCap
-            );
-            const f = stretch * FORCE_CFG.dragNeighborSpring * edgeWeight;
-
-            forces[neighborId].fx += (dx / dist) * f;
-            forces[neighborId].fy += (dy / dist) * f;
-          });
-        }
-      }
-
-      // Gravity toward center
-      nodes.forEach((n) => {
-        const p = posMap[n.id()];
-        forces[n.id()].fx += (cx - p.x) * FORCE_CFG.gravity;
-        forces[n.id()].fy += (cy2 - p.y) * FORCE_CFG.gravity;
-      });
-
-      // Apply forces, update velocities & positions
-      let totalMovement = 0;
-
-      cy.batch(() => {
-        nodes.forEach((n) => {
-          const id = n.id();
-          if (id === grabbedNode.current) return; // skip grabbed node
-
-          const v = vels[id];
-          v.vx = (v.vx + forces[id].fx) * FORCE_CFG.damping;
-          v.vy = (v.vy + forces[id].fy) * FORCE_CFG.damping;
-
-          // Cap velocity
-          const speed = Math.sqrt(v.vx * v.vx + v.vy * v.vy);
-          if (speed > FORCE_CFG.maxVelocity) {
-            v.vx = (v.vx / speed) * FORCE_CFG.maxVelocity;
-            v.vy = (v.vy / speed) * FORCE_CFG.maxVelocity;
-          }
-
-          if (Math.abs(v.vx) < FORCE_CFG.minVelocity) v.vx = 0;
-          if (Math.abs(v.vy) < FORCE_CFG.minVelocity) v.vy = 0;
-
-          totalMovement += Math.abs(v.vx) + Math.abs(v.vy);
-
-          n.position({
-            x: posMap[id].x + v.vx,
-            y: posMap[id].y + v.vy,
-          });
-        });
-      });
-
-      // Auto sleep when stable (but wake on grab)
-      if (totalMovement < 0.5) {
-        idleTicks++;
-        if (idleTicks > FORCE_CFG.cooldownTicks && !grabbedNode.current) {
-          simulationActive.current = false;
-          return;
-        }
-      } else {
-        idleTicks = 0;
-      }
-
-      rafRef.current = requestAnimationFrame(tick);
-    };
-
-    rafRef.current = requestAnimationFrame(tick);
-  }, []);
-
-  const wakeSimulation = useCallback(() => {
-    if (!simulationActive.current && cyRef.current) {
-      simulationActive.current = true;
-      runForceSimulation(cyRef.current);
-    }
-  }, [runForceSimulation]);
-
-  // Decide which data source to use
   const useVault = graph && graph.nodes.length > 0;
-  const activeNodes = useMemo(() =>
-    useVault
-      ? graph.nodes.map((n) => ({ id: n.id, label: n.label, group: "vault" }))
-      : mockNodes,
+  const activeNodes = useMemo(
+    () =>
+      useVault
+        ? graph.nodes.map((n) => ({ id: n.id, label: n.label, group: "vault" }))
+        : mockNodes,
     [useVault, graph]
   );
-  const activeEdges = useMemo(() =>
-    useVault ? graph.edges : mockEdges,
-    [useVault, graph]
-  );
+  const activeEdges = useMemo(() => (useVault ? graph.edges : mockEdges), [useVault, graph]);
 
-  const initGraph = useCallback(() => {
-    if (!containerRef.current) return;
-
-    if (cyRef.current) {
-      cyRef.current.destroy();
-    }
-    cancelAnimationFrame(rafRef.current);
-    simulationActive.current = true;
-
-    // Compute degree for node sizing
-    const degreeMap: Record<string, number> = {};
-    activeNodes.forEach((n) => (degreeMap[n.id] = 0));
-    activeEdges.forEach((e) => {
-      degreeMap[e.source] = (degreeMap[e.source] || 0) + 1;
-      degreeMap[e.target] = (degreeMap[e.target] || 0) + 1;
-    });
-    const groupMap: Record<string, string> = {};
+  const degreeMap = useMemo(() => {
+    const m: Record<string, number> = {};
     activeNodes.forEach((n) => {
-      groupMap[n.id] = n.group;
+      m[n.id] = 0;
+    });
+    activeEdges.forEach((e) => {
+      m[e.source] = (m[e.source] || 0) + 1;
+      m[e.target] = (m[e.target] || 0) + 1;
+    });
+    return m;
+  }, [activeNodes, activeEdges]);
+
+  const groupMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    activeNodes.forEach((n) => {
+      m[n.id] = n.group;
+    });
+    return m;
+  }, [activeNodes]);
+
+  const adjacency = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const e of activeEdges) {
+      if (!m.has(e.source)) m.set(e.source, new Set());
+      if (!m.has(e.target)) m.set(e.target, new Set());
+      m.get(e.source)!.add(e.target);
+      m.get(e.target)!.add(e.source);
+    }
+    return m;
+  }, [activeEdges]);
+
+  const graphData = useMemo((): GraphData<BrainNode, BrainLink> => {
+    const nodes: NodeObject<BrainNode>[] = activeNodes.map((n) => {
+      const deg = degreeMap[n.id] || 1;
+      return {
+        id: n.id,
+        name: n.label,
+        group: n.group,
+        val: clamp(1 + Math.log1p(deg) * 1.4, 1, 12),
+      };
     });
 
-    const elements = [
-      ...activeNodes.map((n) => ({
-        data: {
-          id: n.id,
-          label: n.label,
-          group: n.group,
-          degree: degreeMap[n.id] || 1,
-        },
-      })),
-      ...activeEdges.map((e, i) => {
-        const sourceDegree = degreeMap[e.source] || 1;
-        const targetDegree = degreeMap[e.target] || 1;
-        const avgDegree = (sourceDegree + targetDegree) / 2;
-        const degreeMismatch = Math.abs(sourceDegree - targetDegree);
-
-        const sameGroup = groupMap[e.source] === groupMap[e.target];
-
-        // Weigh links: stronger for local/low-degree pairs, softer for hub-heavy edges.
-        const lowDegreeBoost = 1 + 0.9 / (1 + avgDegree);
-        const hubDamping = 1 / (1 + Math.log1p(Math.max(sourceDegree, targetDegree)) * 0.42);
-        const groupAffinity = sameGroup ? 1.16 : 0.92;
-        const weight = clamp(groupAffinity * lowDegreeBoost * (0.72 + hubDamping), 0.35, 2.2);
-
-        // Adaptive ideal length by local topology to reduce central clumping.
-        const idealLength =
-          FORCE_CFG.baseIdealLength +
-          Math.log1p(avgDegree) * FORCE_CFG.degreeIdealBoost +
-          degreeMismatch * FORCE_CFG.degreeMismatchLengthBoost;
-
-        return {
-          data: {
-            id: `e${i}`,
-            source: e.source,
-            target: e.target,
-            weight,
-            idealLength,
-          },
-        };
-      }),
-    ];
-
-    const cy = cytoscape({
-      container: containerRef.current,
-      elements,
-      style: [
-        {
-          selector: "node",
-          style: {
-            label: "data(label)",
-            width: "mapData(degree, 1, 10, 12, 36)",
-            height: "mapData(degree, 1, 10, 12, 36)",
-            "background-color": (ele) => {
-              const g = ele.data("group");
-              return g === "vault" ? VAULT_NODE_COLOR : (GROUP_COLORS[g] || "#666");
-            },
-            "border-width": 0,
-            "font-size": "9px",
-            "font-family": "Inter, sans-serif",
-            "font-weight": 400,
-            color: "#a0a0a0",
-            "text-valign": "bottom",
-            "text-halign": "center",
-            "text-margin-y": 6,
-            "text-max-width": "80px",
-            "text-wrap": "ellipsis",
-            "min-zoomed-font-size": 8,
-            "overlay-opacity": 0,
-            "transition-property":
-              "background-color, width, height, border-width, border-color, opacity",
-            "transition-duration": 300,
-          } as cytoscape.Css.Node,
-        },
-        {
-          selector: "edge",
-          style: {
-            width: 0.4,
-            "line-color": "rgba(255,255,255,0.018)",
-            "curve-style": "bezier",
-            "overlay-opacity": 0,
-            "transition-property": "line-color, width, opacity",
-            "transition-duration": 300,
-          } as cytoscape.Css.Edge,
-        },
-        {
-          selector: "node.highlighted",
-          style: {
-            "background-color": (ele) => {
-              const g = ele.data("group");
-              return g === "vault" ? VAULT_NODE_COLOR : (GROUP_COLORS[g] || "#888");
-            },
-            "border-width": 2,
-            "border-color": "#ffffff",
-            color: "#e0e0e0",
-            "font-size": "11px",
-            "z-index": 10,
-          } as cytoscape.Css.Node,
-        },
-        {
-          selector: "node.neighbor",
-          style: {
-            "background-color": (ele) => {
-              const g = ele.data("group");
-              return g === "vault" ? VAULT_NODE_COLOR : (GROUP_COLORS[g] || "#666");
-            },
-            color: "#c0c0c0",
-            "z-index": 5,
-          } as cytoscape.Css.Node,
-        },
-        {
-          selector: "node.dimmed",
-          style: {
-            "background-color": (ele) => {
-              const g = ele.data("group");
-              return g === "vault" ? VAULT_NODE_COLOR_DIM : (GROUP_COLORS_DIM[g] || "#333");
-            },
-            color: "#3a3a3a",
-          } as cytoscape.Css.Node,
-        },
-        {
-          selector: "edge.highlighted",
-          style: {
-            width: 0.8,
-            "line-color": "rgba(255,255,255,0.08)",
-            "z-index": 10,
-          } as cytoscape.Css.Edge,
-        },
-        {
-          selector: "edge.dimmed",
-          style: {
-            "line-color": "rgba(255,255,255,0.005)",
-          } as cytoscape.Css.Edge,
-        },
-        // Grab: unconnected nodes become 75% transparent
-        {
-          selector: "node.grab-dimmed",
-          style: {
-            opacity: 0.25,
-          } as cytoscape.Css.Node,
-        },
-        {
-          selector: "edge.grab-dimmed",
-          style: {
-            opacity: 0.15,
-          } as cytoscape.Css.Edge,
-        },
-        {
-          selector: "node.grab-highlight",
-          style: {
-            "border-width": 2,
-            "border-color": "#ffffff",
-            "z-index": 10,
-          } as cytoscape.Css.Node,
-        },
-        {
-          selector: "edge.grab-connected",
-          style: {
-            "line-color": "rgba(255,255,255,0.08)",
-            width: 0.8,
-            "z-index": 10,
-          } as cytoscape.Css.Edge,
-        },
-      ],
-      // Use preset layout — we'll position with force simulation
-      layout: {
-        name: "cose",
-        animate: false,
-        nodeRepulsion: () => 6000,
-        idealEdgeLength: () => 120,
-        edgeElasticity: () => 80,
-        gravity: 0.2,
-        numIter: 500,
-        randomize: true,
-        componentSpacing: 60,
-        nodeDimensionsIncludeLabels: true,
-        padding: 40,
-      } as cytoscape.CoseLayoutOptions,
-      minZoom: 0.15,
-      maxZoom: 4,
-      wheelSensitivity: 0.3,
-      pixelRatio: "auto",
-      textureOnViewport: false,
-      hideEdgesOnViewport: false,
-      hideLabelsOnViewport: false,
+    const links: LinkObject<BrainNode, BrainLink>[] = activeEdges.map((e) => {
+      const ds = degreeMap[e.source] || 1;
+      const dt = degreeMap[e.target] || 1;
+      const avg = (ds + dt) / 2;
+      const mismatch = Math.abs(ds - dt);
+      const sameGroup = groupMap[e.source] === groupMap[e.target];
+      const lowDegBoost = 1 + 0.85 / (1 + avg);
+      const hubDamp = 1 / (1 + Math.log1p(Math.max(ds, dt)) * 0.42);
+      const groupAff = sameGroup ? 1.14 : 0.9;
+      const strength = clamp(groupAff * lowDegBoost * (0.55 + hubDamp * 0.45), PHYSICS.linkStrengthMin, PHYSICS.linkStrengthMax);
+      const distance =
+        PHYSICS.baseLinkDistance +
+        Math.log1p(avg) * PHYSICS.degreeDistanceBoost +
+        mismatch * PHYSICS.degreeMismatchBoost;
+      return {
+        source: e.source,
+        target: e.target,
+        distance,
+        strength,
+      };
     });
 
-    // ── Hover interactions (Obsidian-style) ──
-    cy.on("mouseover", "node", (evt: EventObject) => {
-      const node = evt.target;
-      const neighborhood = node.closedNeighborhood();
+    return { nodes, links };
+  }, [activeNodes, activeEdges, degreeMap, groupMap]);
 
-      cy.elements().addClass("dimmed");
-      neighborhood.removeClass("dimmed");
-      neighborhood.edges().addClass("highlighted");
-      neighborhood.nodes().not(node).addClass("neighbor");
-      node.addClass("highlighted");
+  const graphKey = useMemo(
+    () => `${useVault ? "v" : "m"}-${graphData.nodes.length}-${graphData.links.length}`,
+    [useVault, graphData.nodes.length, graphData.links.length]
+  );
 
-      containerRef.current!.style.cursor = "pointer";
-    });
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || loading) return;
 
-    cy.on("mouseout", "node", () => {
-      cy.elements()
-        .removeClass("dimmed")
-        .removeClass("highlighted")
-        .removeClass("neighbor");
-      containerRef.current!.style.cursor = "grab";
-    });
+    const measure = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w > 0 && h > 0) setDims({ w, h });
+    };
 
-    // ── Grab / drag: pin node, wake physics, dim unconnected ──
-    cy.on("grab", "node", (evt: EventObject) => {
-      const node = evt.target as NodeSingular;
-      grabbedNode.current = node.id();
-      const startPos = node.position();
-      dragLastPos.current = { x: startPos.x, y: startPos.y };
-      dragStartPos.current = { x: startPos.x, y: startPos.y };
-      dragMomentum.current = { vx: 0, vy: 0, ts: performance.now() };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [loading]);
 
-      // Dim unconnected elements
-      const neighborhood = node.closedNeighborhood();
-      cy.elements().addClass("grab-dimmed");
-      neighborhood.removeClass("grab-dimmed");
-      node.addClass("grab-highlight");
-      neighborhood.edges().addClass("grab-connected");
+  useEffect(() => {
+    let cancelled = false;
+    let attempts = 0;
 
-      // Reset all velocities for a smooth response
-      const vels = velocities.current;
-      Object.keys(vels).forEach((id) => { vels[id].vx = 0; vels[id].vy = 0; });
-      wakeSimulation();
-      containerRef.current!.style.cursor = "grabbing";
-    });
+    const applyForces = () => {
+      if (cancelled) return;
+      const fg = fgRef.current;
+      if (!fg) {
+        if (attempts++ < 90) requestAnimationFrame(applyForces);
+        return;
+      }
 
-    cy.on("drag", "node", (evt: EventObject) => {
-      const node = evt.target as NodeSingular;
-      const pos = node.position();
-      const last = dragLastPos.current;
-      const start = dragStartPos.current;
+      const linkForce = fg.d3Force("link") as unknown as {
+        distance?: (fn: (l: LinkObject<BrainNode, BrainLink>) => number) => void;
+        strength?: (fn: (l: LinkObject<BrainNode, BrainLink>) => number) => void;
+      };
 
-      if (start) {
-        const movedDistance = Math.hypot(pos.x - start.x, pos.y - start.y);
-        if (movedDistance > 2.5) {
-          suppressNodeTapUntil.current = performance.now() + 220;
+      if (linkForce && typeof linkForce.distance === "function") {
+        linkForce.distance((l) => Number(l.distance));
+        linkForce.strength?.((l) => Number(l.strength));
+      }
+
+      const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void };
+      charge?.strength?.(PHYSICS.chargeStrength);
+
+      fg.d3Force(
+        "center",
+        forceCenter(0, 0, 0).strength(PHYSICS.centerStrength)
+      );
+      fg.d3Force("x", forceX(0).strength(PHYSICS.pullToOriginStrength));
+      fg.d3Force("y", forceY(0).strength(PHYSICS.pullToOriginStrength));
+
+      fg.d3ReheatSimulation();
+    };
+
+    requestAnimationFrame(applyForces);
+    return () => {
+      cancelled = true;
+    };
+  }, [graphData, graphKey, dims.w, dims.h]);
+
+  const highlightSet = useMemo(() => {
+    if (!hoverId) return null as Set<string> | null;
+    const set = new Set<string>([hoverId]);
+    const neigh = adjacency.get(hoverId);
+    if (neigh) neigh.forEach((id) => set.add(id));
+    return set;
+  }, [hoverId, adjacency]);
+
+  const updateLinkHighlight = useCallback(
+    (centerId: string | null) => {
+      if (!centerId) {
+        setHighlightLinks(new Set());
+        return;
+      }
+      const neigh = adjacency.get(centerId);
+      const keys = new Set<string>();
+      if (neigh) {
+        for (const nb of neigh) {
+          keys.add(linkKey(centerId, nb));
         }
       }
+      setHighlightLinks(keys);
+    },
+    [adjacency]
+  );
 
-      if (last) {
-        const dx = pos.x - last.x;
-        const dy = pos.y - last.y;
-        const now = performance.now();
-        const currentMomentum = dragMomentum.current ?? { vx: 0, vy: 0, ts: now };
-        const dt = Math.max(1, now - currentMomentum.ts);
-        const instantVX = dx / dt;
-        const instantVY = dy / dt;
-        const smooth = FORCE_CFG.dragVelocitySmoothing;
-        const blendedVX = currentMomentum.vx * (1 - smooth) + instantVX * smooth;
-        const blendedVY = currentMomentum.vy * (1 - smooth) + instantVY * smooth;
-        dragMomentum.current = { vx: blendedVX, vy: blendedVY, ts: now };
+  const nodeColor = useCallback(
+    (node: NodeObject<BrainNode>) => {
+      const isVault = node.group === "vault";
+      const base = isVault ? VAULT_NODE_COLOR : GROUP_COLORS[node.group] || "#b0b0b0";
+      if (!highlightSet) return base;
+      if (highlightSet.has(String(node.id))) return base;
+      return isVault ? VAULT_NODE_COLOR_DIM : GROUP_COLORS_DIM[node.group] || "#484848";
+    },
+    [highlightSet]
+  );
 
-        applyDragPropagation(cy, node.id(), dx, dy, { vx: blendedVX, vy: blendedVY });
+  const linkColor = useCallback(
+    (link: LinkObject<BrainNode, BrainLink>) => {
+      const a = nodeIdOf(link.source);
+      const b = nodeIdOf(link.target);
+      const k = linkKey(a, b);
+      const base = "rgba(255,255,255,0.14)";
+      const hi = "rgba(255,255,255,0.38)";
+      const faded = "rgba(255,255,255,0.045)";
+      if (highlightLinks.size === 0) return base;
+      return highlightLinks.has(k) ? hi : faded;
+    },
+    [highlightLinks]
+  );
+
+  const linkWidth = useCallback(
+    (link: LinkObject<BrainNode, BrainLink>) => {
+      const a = nodeIdOf(link.source);
+      const b = nodeIdOf(link.target);
+      return highlightLinks.has(linkKey(a, b)) ? 1.25 : 0.65;
+    },
+    [highlightLinks]
+  );
+
+  const nodeCanvasObjectMode = useCallback(() => "after" as const, []);
+
+  const nodeCanvasObject = useCallback(
+    (node: NodeObject<BrainNode>, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const label = (node.name ?? "").trim() || String(node.id ?? "");
+      const r = Math.sqrt(Math.max(0, node.val || 1)) * NODE_REL_SIZE;
+      const k = Math.max(globalScale, 0.04);
+      const fontPx = 11 / k;
+      const pad = 5 / k;
+      ctx.font = `${fontPx}px Inter, system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+
+      const id = String(node.id);
+      let fill: string;
+      if (!highlightSet) {
+        fill = "rgba(200, 200, 200, 0.94)";
+      } else if (highlightSet.has(id)) {
+        fill = "rgba(240, 240, 240, 0.98)";
+      } else {
+        fill = "rgba(115, 115, 115, 0.72)";
       }
-      dragLastPos.current = { x: pos.x, y: pos.y };
-      wakeSimulation();
-    });
+      ctx.fillStyle = fill;
 
-    cy.on("free", "node", (evt: EventObject) => {
-      const node = evt.target as NodeSingular;
-      const momentum = dragMomentum.current;
-      if (momentum) {
-        applyReleaseInertia(cy, node.id(), momentum.vx, momentum.vy);
-      }
+      const maxW = 168 / k;
+      const truncated = truncateCanvasLabel(ctx, label, maxW);
+      const x = node.x ?? 0;
+      const y = node.y ?? 0;
+      ctx.fillText(truncated, x, y + r + pad);
+    },
+    [highlightSet]
+  );
 
-      grabbedNode.current = null;
-      dragLastPos.current = null;
-      dragStartPos.current = null;
-      dragMomentum.current = null;
-      cy.elements()
-        .removeClass("grab-dimmed")
-        .removeClass("grab-highlight")
-        .removeClass("grab-connected");
-      wakeSimulation();
-      containerRef.current!.style.cursor = "grab";
-    });
+  const onNodeHover = useCallback(
+    (node: NodeObject<BrainNode> | null) => {
+      const id = node?.id != null ? String(node.id) : null;
+      setHoverId(id);
+      updateLinkHighlight(id);
+    },
+    [updateLinkHighlight]
+  );
 
-    cy.on("tap", "node", (evt: EventObject) => {
-      if (performance.now() < suppressNodeTapUntil.current) return;
+  const onNodeClick = useCallback(
+    (node: NodeObject<BrainNode>, _event: MouseEvent) => {
+      if (performance.now() < suppressClickUntil.current) return;
       if (!onOpenConversationFromNode) return;
+      onOpenConversationFromNode(String(node.id), node.name);
+    },
+    [onOpenConversationFromNode]
+  );
 
-      const node = evt.target as NodeSingular;
-      const nodeId = node.id();
-      const nodeLabel = String(node.data("label") ?? nodeId);
-      onOpenConversationFromNode(nodeId, nodeLabel);
-    });
+  const onNodeDrag = useCallback(
+    (_node: NodeObject<BrainNode>, translate: { x: number; y: number }) => {
+      dragAccumRef.current += Math.hypot(translate.x, translate.y);
+    },
+    []
+  );
 
-    containerRef.current.style.cursor = "grab";
-    cyRef.current = cy;
+  const onNodeDragEnd = useCallback((_node: NodeObject<BrainNode>, _translate: { x: number; y: number }) => {
+    if (dragAccumRef.current > 3) {
+      suppressClickUntil.current = performance.now() + 240;
+    }
+    dragAccumRef.current = 0;
+    fgRef.current?.d3ReheatSimulation();
+  }, []);
 
-    // Start continuous force simulation after initial layout
-    cy.one("layoutstop", () => {
-      velocities.current = {};
-      runForceSimulation(cy);
-    });
-  }, [
-    runForceSimulation,
-    wakeSimulation,
-    applyDragPropagation,
-    applyReleaseInertia,
-    onOpenConversationFromNode,
-    activeNodes,
-    activeEdges,
-  ]);
+  const onEngineStop = useCallback(() => {
+    if (fitDoneKey.current === graphKey) return;
+    fitDoneKey.current = graphKey;
+    fgRef.current?.zoomToFit(480, 36);
+  }, [graphKey]);
 
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => {
-      initGraph();
-    });
-
-    return () => {
-      cancelAnimationFrame(raf);
-      simulationActive.current = false;
-      cancelAnimationFrame(rafRef.current);
-      if (cyRef.current) {
-        cyRef.current.destroy();
-        cyRef.current = null;
-      }
-    };
-  }, [initGraph]);
-
-  // Handle resize
-  useEffect(() => {
-    const handleResize = () => {
-      cyRef.current?.resize();
-      cyRef.current?.fit(undefined, 40);
-    };
-
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+  const onBackgroundClick = useCallback((_event: MouseEvent) => {
+    setHoverId(null);
+    setHighlightLinks(new Set());
   }, []);
 
   return (
@@ -801,6 +506,7 @@ export default function BrainGraphView({ onClose, graph, loading, onOpenConversa
         className="brain-graph-close"
         onClick={onClose}
         aria-label="Fechar visualização"
+        type="button"
       >
         <X size={16} strokeWidth={2} />
       </button>
@@ -816,7 +522,7 @@ export default function BrainGraphView({ onClose, graph, loading, onOpenConversa
             {useVault ? (
               <span className="legend-item">
                 <span className="legend-dot" style={{ background: VAULT_NODE_COLOR }} />
-                {graph.nodes.length} notas &middot; {graph.edges.length} conexões
+                {graph!.nodes.length} notas &middot; {graph!.edges.length} conexões
               </span>
             ) : (
               Object.entries(GROUP_COLORS).map(([group, color]) => (
@@ -836,7 +542,43 @@ export default function BrainGraphView({ onClose, graph, loading, onOpenConversa
             )}
           </div>
 
-          <div ref={containerRef} className="brain-graph-container" />
+          <div ref={containerRef} className="brain-graph-container">
+            <ForceGraph2D
+              ref={fgRef as MutableRefObject<ForceGraphMethods | undefined>}
+              width={dims.w}
+              height={dims.h}
+              graphData={graphData}
+              backgroundColor="rgba(0,0,0,0)"
+              nodeId="id"
+              nodeLabel="name"
+              nodeVal="val"
+              nodeRelSize={NODE_REL_SIZE}
+              nodeCanvasObjectMode={nodeCanvasObjectMode}
+              nodeCanvasObject={nodeCanvasObject}
+              autoPauseRedraw={false}
+              nodeColor={nodeColor}
+              linkColor={linkColor}
+              linkWidth={linkWidth}
+              linkDirectionalParticles={0}
+              d3VelocityDecay={PHYSICS.velocityDecay}
+              d3AlphaDecay={PHYSICS.alphaDecay}
+              d3AlphaMin={PHYSICS.alphaMin}
+              warmupTicks={PHYSICS.warmupTicks}
+              cooldownTime={PHYSICS.cooldownMs}
+              enableNodeDrag
+              enableZoomInteraction
+              enablePanInteraction
+              minZoom={0.12}
+              maxZoom={8}
+              showNavInfo={false}
+              onNodeClick={onNodeClick}
+              onNodeHover={onNodeHover}
+              onNodeDrag={onNodeDrag}
+              onNodeDragEnd={onNodeDragEnd}
+              onBackgroundClick={onBackgroundClick}
+              onEngineStop={onEngineStop}
+            />
+          </div>
         </>
       )}
 
@@ -910,6 +652,11 @@ export default function BrainGraphView({ onClose, graph, loading, onOpenConversa
           flex: 1;
           width: 100%;
           min-height: 0;
+          cursor: grab;
+        }
+
+        .brain-graph-container :global(canvas) {
+          outline: none;
         }
 
         .brain-graph-loading {
@@ -929,8 +676,12 @@ export default function BrainGraphView({ onClose, graph, loading, onOpenConversa
         }
 
         @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
         }
       `}</style>
     </div>

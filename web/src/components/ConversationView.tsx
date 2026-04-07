@@ -15,6 +15,11 @@ type ConversationViewProps = {
   onClose: () => void;
 };
 
+function formatConversationHeaderTitle(rawTitle: string): string {
+  const withoutMetadata = rawTitle.replace(/\s+-\s*\([^)]*\)\s*$/, "").trim();
+  return withoutMetadata || "Conversa";
+}
+
 function roleFromLabel(label: string): "user" | "assistant" {
   const normalized = label.trim().toLowerCase();
   if (["user", "utilizador", "usuario", "usuário", "you", "voce", "você"].includes(normalized)) {
@@ -42,6 +47,17 @@ function parseRoleMarker(line: string): {
   role: "user" | "assistant";
   inlineText: string;
 } | null {
+  const timestampHeadingMatch = line.match(
+    /^\s*#{1,6}\s*(user|utilizador|usuario|usuário|you|voce|você|assistant|chatgpt|ai|brain2|brain)\b\s*[—–-]\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/i
+  );
+
+  if (timestampHeadingMatch) {
+    return {
+      role: roleFromLabel(timestampHeadingMatch[1]),
+      inlineText: "",
+    };
+  }
+
   const markerMatch = line.match(
     /^\s*(#{1,6}\s*)?(user|utilizador|usuario|usuário|you|voce|você|assistant|chatgpt|ai|brain2|brain)\b(?:\s*([:\-–—])\s*(.*))?\s*$/i
   );
@@ -148,6 +164,10 @@ export default function ConversationView({ conversation, onClose }: Conversation
     () => parseConversationMarkdown(conversation.content),
     [conversation.content]
   );
+  const displayTitle = useMemo(
+    () => formatConversationHeaderTitle(conversation.title),
+    [conversation.title]
+  );
   const copyTimeoutRef = useRef<number | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
@@ -182,10 +202,8 @@ export default function ConversationView({ conversation, onClose }: Conversation
     <div className="conversation-root">
       <header className="conversation-header">
         <div className="conversation-headings">
-          <h2>{conversation.title}</h2>
-          <p>
-            {conversation.path} · atualizado em {formatModifiedDate(conversation.modifiedAt)}
-          </p>
+          <h2>{displayTitle}</h2>
+          <p>Atualizado em {formatModifiedDate(conversation.modifiedAt)}</p>
         </div>
         <button className="conversation-close" type="button" onClick={onClose}>
           <X size={15} strokeWidth={2} />
@@ -310,18 +328,20 @@ export default function ConversationView({ conversation, onClose }: Conversation
           display: flex;
           align-items: flex-start;
           gap: 0;
-          width: min(860px, 100%);
+          width: 100%;
+          justify-content: flex-start;
         }
 
         .message-row--user {
-          margin-left: auto;
+          justify-content: flex-end;
         }
 
         .message-bubble {
           background: transparent;
           border: none;
           padding: 0;
-          max-width: min(760px, 100%);
+          width: min(760px, 100%);
+          text-align: left;
         }
 
         .message-bubble--user {

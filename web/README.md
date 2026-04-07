@@ -1,5 +1,18 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Firebase Google Login (Brain2)
+
+1. Copy `.env.local.example` to `.env.local`.
+2. Fill these values from Firebase Console > Project settings > Your apps (Web app):
+	- `NEXT_PUBLIC_FIREBASE_API_KEY`
+	- `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
+	- `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
+	- `NEXT_PUBLIC_FIREBASE_APP_ID`
+3. In Firebase Console > Authentication > Sign-in method, enable `Google` provider.
+4. In Firebase Console > Authentication > Settings > Authorized domains, add your local/host domain if needed.
+
+After that, start the app and use `Entrar com Google` on the login screen.
+
 ## Getting Started
 
 First, run the development server:
