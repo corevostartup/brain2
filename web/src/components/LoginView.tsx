@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 type LoginViewProps = {
   onLogin: () => Promise<void> | void;
@@ -13,6 +13,27 @@ export default function LoginView({ onLogin, authLoading = false, authError = nu
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
+  const [showMacGoogleHint, setShowMacGoogleHint] = useState(false);
+
+  useEffect(() => {
+    const syncMacHint = () => {
+      const bridge = (window as unknown as { Brain2Native?: { startGoogleSignIn?: () => void } }).Brain2Native;
+      setShowMacGoogleHint(typeof bridge?.startGoogleSignIn === "function");
+    };
+    syncMacHint();
+    window.addEventListener("brain2-native-bridge-ready", syncMacHint);
+    return () => window.removeEventListener("brain2-native-bridge-ready", syncMacHint);
+  }, []);
+
+  useEffect(() => {
+    const endGoogleBusy = () => setIsGoogleSubmitting(false);
+    window.addEventListener("brain2-native-google-signin-error", endGoogleBusy);
+    window.addEventListener("brain2-native-google-tokens", endGoogleBusy);
+    return () => {
+      window.removeEventListener("brain2-native-google-signin-error", endGoogleBusy);
+      window.removeEventListener("brain2-native-google-tokens", endGoogleBusy);
+    };
+  }, []);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -35,13 +56,20 @@ export default function LoginView({ onLogin, authLoading = false, authError = nu
       return;
     }
 
+    const useNativeChrome =
+      typeof window !== "undefined" &&
+      typeof (window as unknown as { Brain2Native?: { startGoogleSignIn?: () => void } }).Brain2Native
+        ?.startGoogleSignIn === "function";
+
     setIsGoogleSubmitting(true);
     try {
       await onLogin();
     } catch {
       // Errors are surfaced by the parent auth state.
     } finally {
-      setIsGoogleSubmitting(false);
+      if (!useNativeChrome) {
+        setIsGoogleSubmitting(false);
+      }
     }
   };
 
@@ -52,6 +80,11 @@ export default function LoginView({ onLogin, authLoading = false, authError = nu
       <section className="login-card" role="form" aria-label="Acesso ao Brain2">
         <h1>Brain2</h1>
         <p>Entre para acessar seu segundo cerebro.</p>
+        {showMacGoogleHint ? (
+          <p className="login-mac-google-hint">
+            No app Mac, o Google abre numa janela do sistema (como no Cursor). Depois do login, voltas automaticamente ao Brain2.
+          </p>
+        ) : null}
 
         <form onSubmit={handleSubmit} className="login-form">
           <label className="field">
@@ -154,6 +187,15 @@ export default function LoginView({ onLogin, authLoading = false, authError = nu
           font-family: "Inter", sans-serif;
           font-size: 0.78rem;
           color: #888;
+          letter-spacing: 0.02em;
+        }
+
+        .login-mac-google-hint {
+          margin-top: 12px;
+          font-family: "Inter", sans-serif;
+          font-size: 0.72rem;
+          line-height: 1.45;
+          color: #9a9a9a;
           letter-spacing: 0.02em;
         }
 

@@ -28,6 +28,7 @@ import {
   getFirebaseAuthClient,
   getFirebaseConfigError,
   getGoogleAuthProvider,
+  signInWithGoogleNativeIdToken,
 } from "@/lib/firebaseClient";
 import {
   logFirestoreRegistrationError,
@@ -85,6 +86,7 @@ type NativeVaultPayload = {
 
 type NativeBridge = {
   isAvailable?: boolean;
+  startGoogleSignIn?: () => void;
   pickDirectory?: () => void;
   saveConversation?: (payload: {
     conversationId: string;
@@ -100,6 +102,7 @@ function isBrain2NativeAppShell(): boolean {
   }
   return Boolean((window as unknown as { Brain2Native?: NativeBridge }).Brain2Native?.isAvailable);
 }
+
 
 function toIsoDate(timestamp: number): string {
   return new Date(timestamp).toISOString();
@@ -377,6 +380,48 @@ export default function Home() {
     return () => {
       unsubscribed = true;
       unsubscribeAuth?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !isBrain2NativeAppShell()) {
+      return;
+    }
+
+    const onTokens = async (ev: Event) => {
+      const custom = ev as CustomEvent<{ idToken?: string; accessToken?: string }>;
+      const idToken = custom.detail?.idToken;
+      if (!idToken) {
+        return;
+      }
+      const configError = getFirebaseConfigError();
+      if (configError) {
+        setAuthError(configError);
+        return;
+      }
+      try {
+        setAuthError(null);
+        await signInWithGoogleNativeIdToken(idToken, custom.detail?.accessToken);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Falha ao entrar com a conta Google (app Mac).";
+        setAuthError(message);
+      }
+    };
+
+    const onNativeError = (ev: Event) => {
+      const custom = ev as CustomEvent<{ message?: string }>;
+      const message = custom.detail?.message?.trim();
+      if (message) {
+        setAuthError(message);
+      }
+    };
+
+    window.addEventListener("brain2-native-google-tokens", onTokens);
+    window.addEventListener("brain2-native-google-signin-error", onNativeError);
+    return () => {
+      window.removeEventListener("brain2-native-google-tokens", onTokens);
+      window.removeEventListener("brain2-native-google-signin-error", onNativeError);
     };
   }, []);
 
@@ -1031,6 +1076,14 @@ export default function Home() {
 
     try {
       setAuthError(null);
+
+      if (isBrain2NativeAppShell()) {
+        const bridge = (window as unknown as { Brain2Native?: NativeBridge }).Brain2Native;
+        if (typeof bridge?.startGoogleSignIn === "function") {
+          bridge.startGoogleSignIn();
+          return;
+        }
+      }
 
       if (isBrain2NativeAppShell()) {
         await signInWithRedirect(auth, provider);

@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import AuthenticationServices
 import Foundation
 import SwiftUI
 import WebKit
@@ -79,7 +80,7 @@ struct WebView: NSViewRepresentable {
         webView.load(URLRequest(url: url))
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler, ASWebAuthenticationPresentationContextProviding {
         static let messageHandlerName = "brain2Native"
         private static let selectedVaultPathDefaultsKey = "brain2-selected-vault-path"
         private static let selectedVaultBookmarkDefaultsKey = "brain2-selected-vault-bookmark"
@@ -88,6 +89,8 @@ struct WebView: NSViewRepresentable {
         private static let llmApiKeyDefaultsKey = "brain2-llm-api-key"
 
         private weak var webView: WKWebView?
+        private var googleAuthSession: ASWebAuthenticationSession?
+        private var oauthPresentationWindow: NSWindow?
         private let fileManager = FileManager.default
         private lazy var wikilinkRegex = try? NSRegularExpression(
             pattern: #"\[\[([^\]|#]+?)(?:#[^\]|]*)?(?:\|[^\]]*?)?\]\]"#
@@ -136,6 +139,150 @@ struct WebView: NSViewRepresentable {
 
             if type == "clearLlmConfig" {
                 clearLlmConfig()
+            }
+
+            if type == "startGoogleSignIn" {
+                startGoogleSignInWithSystemBrowser()
+            }
+        }
+
+        func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+            oauthPresentationWindow
+                ?? webView?.window
+                ?? NSApp.keyWindow
+                ?? NSApp.mainWindow
+                ?? NSApplication.shared.windows.first { $0.isVisible }
+                ?? NSApplication.shared.windows.first!
+        }
+
+        private func startGoogleSignInWithSystemBrowser() {
+            let clientId = NativeOAuthSecrets.googleOAuthDesktopClientID
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clientId.isEmpty else {
+                publishGoogleSignInError(
+                    "Configure googleOAuthDesktopClientID em NativeOAuthSecrets.swift. No Google Cloud crie um ID OAuth tipo Computador e autorize o redirect http://127.0.0.1:8765/"
+                )
+                return
+            }
+
+            guard
+                let anchor = webView?.window
+                    ?? NSApp.keyWindow
+                    ?? NSApp.mainWindow
+                    ?? NSApplication.shared.windows.first(where: { $0.isVisible })
+            else {
+                publishGoogleSignInError("Nenhuma janela disponivel para apresentar o login do Google.")
+                return
+            }
+
+            let verifier = GoogleDesktopOAuth.randomPKCEVerifier()
+            guard let challenge = GoogleDesktopOAuth.pkceChallengeS256(verifier: verifier) else {
+                publishGoogleSignInError("Falha ao preparar o login (PKCE).")
+                return
+            }
+
+            let state = GoogleDesktopOAuth.randomPKCEVerifier()
+            guard let authURL = GoogleDesktopOAuth.buildAuthorizationURL(
+                clientId: clientId,
+                challenge: challenge,
+                state: state
+            ) else {
+                publishGoogleSignInError("URL de autorizacao invalida.")
+                return
+            }
+
+            oauthPresentationWindow = anchor
+
+            let session = ASWebAuthenticationSession(
+                url: authURL,
+                callbackURLScheme: "http"
+            ) { [weak self] callbackURL, error in
+                guard let self else { return }
+                self.googleAuthSession = nil
+                self.oauthPresentationWindow = nil
+
+                if let error {
+                    self.publishGoogleSignInError(error.localizedDescription)
+                    return
+                }
+
+                guard let callbackURL,
+                      let items = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems
+                else {
+                    self.publishGoogleSignInError("Resposta inesperada do Google.")
+                    return
+                }
+
+                if let errorCode = items.first(where: { $0.name == "error" })?.value {
+                    let desc = items.first(where: { $0.name == "error_description" })?.value ?? errorCode
+                    self.publishGoogleSignInError(desc)
+                    return
+                }
+
+                guard let code = items.first(where: { $0.name == "code" })?.value else {
+                    self.publishGoogleSignInError("Codigo de autorizacao ausente.")
+                    return
+                }
+
+                GoogleDesktopOAuth.exchangeCodeForTokens(
+                    code: code,
+                    clientId: clientId,
+                    codeVerifier: verifier
+                ) { result in
+                    switch result {
+                    case .success(let tokens):
+                        self.publishGoogleTokens(idToken: tokens.idToken, accessToken: tokens.accessToken)
+                    case .failure(let err):
+                        self.publishGoogleSignInError(err.localizedDescription)
+                    }
+                }
+            }
+
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = false
+            googleAuthSession = session
+
+            if !session.start() {
+                googleAuthSession = nil
+                oauthPresentationWindow = nil
+                publishGoogleSignInError("Nao foi possivel abrir a janela de login do Google.")
+            }
+        }
+
+        private func publishGoogleTokens(idToken: String, accessToken: String?) {
+            let payload: [String: String] = [
+                "idToken": idToken,
+                "accessToken": accessToken ?? "",
+            ]
+            guard JSONSerialization.isValidJSONObject(payload),
+                  let data = try? JSONSerialization.data(withJSONObject: payload),
+                  let json = String(data: data, encoding: .utf8)
+            else {
+                return
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                let script = """
+                window.dispatchEvent(new CustomEvent('brain2-native-google-tokens', { detail: \(json) }));
+                """
+                self?.webView?.evaluateJavaScript(script, completionHandler: nil)
+            }
+        }
+
+        private func publishGoogleSignInError(_ message: String) {
+            let detail: [String: String] = ["message": message]
+            guard JSONSerialization.isValidJSONObject(detail),
+                  let data = try? JSONSerialization.data(withJSONObject: detail),
+                  let json = String(data: data, encoding: .utf8)
+            else {
+                return
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                let script = """
+                window.dispatchEvent(new CustomEvent('brain2-native-google-signin-error', { detail: \(json) }));
+                """
+                self?.webView?.evaluateJavaScript(script, completionHandler: nil)
             }
         }
 
@@ -208,6 +355,11 @@ struct WebView: NSViewRepresentable {
                                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'clearLlmConfig' });
                             } catch (_) {}
                         };
+            window.Brain2Native.startGoogleSignIn = function () {
+              try {
+                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'startGoogleSignIn' });
+              } catch (_) {}
+            };
             window.dispatchEvent(new CustomEvent('brain2-native-bridge-ready'));
             """
             webView?.evaluateJavaScript(script, completionHandler: nil)

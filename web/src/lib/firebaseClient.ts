@@ -1,5 +1,10 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, type Auth } from "firebase/auth";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithCredential,
+  type Auth,
+} from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -70,4 +75,17 @@ export function getFirebaseFirestore(): Firestore {
 
   firestoreInstance = getFirestore(getFirebaseApp());
   return firestoreInstance;
+}
+
+/** Login Google vindo do app Mac (ASWebAuthenticationSession + PKCE), fora do WKWebView. */
+export async function signInWithGoogleNativeIdToken(
+  idToken: string,
+  accessToken?: string | null
+): Promise<void> {
+  const auth = getFirebaseAuthClient();
+  const credential = GoogleAuthProvider.credential(
+    idToken,
+    accessToken && accessToken.length > 0 ? accessToken : undefined
+  );
+  await signInWithCredential(auth, credential);
 }
