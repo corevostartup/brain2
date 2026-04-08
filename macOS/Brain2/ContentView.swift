@@ -77,7 +77,19 @@ struct WebView: NSViewRepresentable {
 
     private func loadURL(in webView: WKWebView) {
         guard let url = URL(string: urlString) else { return }
-        webView.load(URLRequest(url: url))
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        var queryItems = components?.queryItems ?? []
+        // Evita bundle JS stale no WKWebView entre deploys da web.
+        queryItems.append(URLQueryItem(name: "brain2-shell", value: "macos"))
+        queryItems.append(URLQueryItem(name: "brain2-t", value: String(Int(Date().timeIntervalSince1970))))
+        components?.queryItems = queryItems
+        let finalURL = components?.url ?? url
+        let request = URLRequest(
+            url: finalURL,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 30
+        )
+        webView.load(request)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler, ASWebAuthenticationPresentationContextProviding {

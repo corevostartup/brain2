@@ -401,7 +401,7 @@ export default function BrainGraphView({
       if (cancelled) return;
       const fg = fgRef.current;
       if (!fg) {
-        if (attempts++ < 90) requestAnimationFrame(applyForces);
+        if (attempts++ < 900) requestAnimationFrame(applyForces);
         return;
       }
 
@@ -558,11 +558,14 @@ export default function BrainGraphView({
     (node: NodeObject<BrainNode>) => {
       const isVault = node.group === "vault";
       const base = isVault ? VAULT_NODE_COLOR : GROUP_COLORS[node.group] || "#b0b0b0";
+      if (isNativeShell) {
+        return base;
+      }
       if (!highlightSet) return base;
       if (highlightSet.has(String(node.id))) return base;
       return isVault ? VAULT_NODE_COLOR_DIM : GROUP_COLORS_DIM[node.group] || "#484848";
     },
-    [highlightSet]
+    [highlightSet, isNativeShell]
   );
 
   const linkColor = useCallback(
@@ -573,19 +576,25 @@ export default function BrainGraphView({
       const base = "rgba(255,255,255,0.14)";
       const hi = "rgba(255,255,255,0.38)";
       const faded = "rgba(255,255,255,0.045)";
+      if (isNativeShell) {
+        return base;
+      }
       if (highlightLinks.size === 0) return base;
       return highlightLinks.has(k) ? hi : faded;
     },
-    [highlightLinks]
+    [highlightLinks, isNativeShell]
   );
 
   const linkWidth = useCallback(
     (link: LinkObject<BrainNode, BrainLink>) => {
       const a = nodeIdOf(link.source);
       const b = nodeIdOf(link.target);
+      if (isNativeShell) {
+        return 0.9;
+      }
       return highlightLinks.has(linkKey(a, b)) ? 1.25 : 0.65;
     },
-    [highlightLinks]
+    [highlightLinks, isNativeShell]
   );
 
   const nodeCanvasObjectMode = useCallback(() => "after" as const, []);
@@ -603,7 +612,9 @@ export default function BrainGraphView({
 
       const id = String(node.id);
       let fill: string;
-      if (!highlightSet) {
+      if (isNativeShell) {
+        fill = "rgba(220, 220, 220, 0.96)";
+      } else if (!highlightSet) {
         fill = "rgba(200, 200, 200, 0.94)";
       } else if (highlightSet.has(id)) {
         fill = "rgba(240, 240, 240, 0.98)";
@@ -618,7 +629,7 @@ export default function BrainGraphView({
       const y = node.y ?? 0;
       ctx.fillText(truncated, x, y + r + pad);
     },
-    [highlightSet]
+    [highlightSet, isNativeShell]
   );
 
   const onNodeHover = useCallback(
@@ -666,7 +677,10 @@ export default function BrainGraphView({
     if (fitDoneKey.current === fitKey) return;
     fitDoneKey.current = fitKey;
     fgRef.current?.zoomToFit(480, 36);
-  }, [graphKey, dims.w, dims.h]);
+    if (isNativeShell && useVault) {
+      window.setTimeout(() => fgRef.current?.d3ReheatSimulation(), 140);
+    }
+  }, [graphKey, dims.w, dims.h, isNativeShell, useVault]);
 
   const onBackgroundClick = useCallback((_event: MouseEvent) => {
     setHoverId(null);
@@ -738,6 +752,7 @@ export default function BrainGraphView({
               d3AlphaMin={isNativeShell && useVault ? PHYSICS.nativeAlphaMin : PHYSICS.alphaMin}
               warmupTicks={PHYSICS.warmupTicks}
               cooldownTime={isNativeShell && useVault ? PHYSICS.nativeCooldownMs : PHYSICS.cooldownMs}
+              cooldownTicks={isNativeShell && useVault ? 120000 : undefined}
               enableNodeDrag
               enableZoomInteraction
               enablePanInteraction
