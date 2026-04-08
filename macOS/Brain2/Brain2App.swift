@@ -13,7 +13,8 @@ struct Brain2App: App {
         WindowGroup {
             ContentView()
         }
-        .defaultSize(width: 1440, height: 720)
+        // Tamanho inicial ao abrir; o utilizador pode redimensionar livremente.
+        .defaultSize(width: 2560, height: 1600)
         .windowStyle(.hiddenTitleBar)
     }
 }
