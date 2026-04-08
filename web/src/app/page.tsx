@@ -38,6 +38,10 @@ import {
   CLOUD_PROVIDER_STORAGE_KEY,
   loadGoogleDriveVaultFolderConfig,
 } from "@/lib/vaultCloudConfig";
+import {
+  coerceNativeVaultGraph,
+  fingerprintNativeVaultState,
+} from "@/lib/nativeVaultPayload";
 import { requestGoogleDriveAccessToken } from "@/lib/googleDrive";
 import { loadVaultFromGoogleDriveFolder } from "@/lib/googleDriveVault";
 
@@ -317,6 +321,8 @@ export default function Home() {
   const [hasNativeVaultData, setHasNativeVaultData] = useState(false);
   /** Atualizado em sync dentro de `applyVaultData` para evitar corrida com fetch do preset a sobrescrever o vault WKWebView. */
   const hasNativeVaultDataRef = useRef(false);
+  /** Evita reaplicar o mesmo payload nativo; inclui max(modifiedAt) para detetar ficheiros alterados. */
+  const lastNativeVaultFingerprintRef = useRef<string>("");
   const [hasCloudVaultData, setHasCloudVaultData] = useState(false);
   const [vaultDataVersion, setVaultDataVersion] = useState(0);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -487,6 +493,9 @@ export default function Home() {
     const markNative = Boolean(options?.markAsNative);
     setHasNativeVaultData(markNative);
     hasNativeVaultDataRef.current = markNative;
+    if (!markNative) {
+      lastNativeVaultFingerprintRef.current = "";
+    }
     setHasCloudVaultData(Boolean(options?.markAsCloud));
     if (typeof window !== "undefined") {
       if (markNative) {
@@ -619,33 +628,60 @@ export default function Home() {
       return;
     }
 
-    const applyNativePayload = (payload?: NativeVaultPayload) => {
-      if (!payload) return;
+    const tryConsumeNativeWindowState = () => {
+      const w = window as Window & { Brain2NativeState?: NativeVaultPayload };
+      const state = w.Brain2NativeState;
+      if (!state?.path?.trim()) {
+        return;
+      }
+
+      const coercedGraph = coerceNativeVaultGraph(state.graph);
+      const graph = coercedGraph !== undefined ? coercedGraph : state.graph;
+
+      const fp = fingerprintNativeVaultState({
+        path: state.path,
+        graph: graph as VaultGraph | null | undefined,
+        conversations: state.conversations,
+      });
+
+      if (fp === lastNativeVaultFingerprintRef.current) {
+        return;
+      }
+      lastNativeVaultFingerprintRef.current = fp;
+
       applyVaultData(
         {
-          path: payload.path,
-          folders: payload.folders,
-          graph: payload.graph,
-          conversations: payload.conversations,
+          path: state.path,
+          folders: state.folders,
+          graph,
+          conversations: state.conversations,
         },
         { markAsNative: true, markAsCloud: false }
       );
     };
 
-    const handleNativeVaultSelection = (event: Event) => {
-      const customEvent = event as CustomEvent<NativeVaultPayload>;
-      applyNativePayload(customEvent.detail);
+    const onNativeVaultEvent = (_event: Event) => {
+      tryConsumeNativeWindowState();
     };
 
-    window.addEventListener("brain2-native-vault-selected", handleNativeVaultSelection);
+    window.addEventListener("brain2-native-vault-selected", onNativeVaultEvent);
+    window.addEventListener("brain2-native-bridge-ready", onNativeVaultEvent);
 
-    const nativeState = (window as Window & { Brain2NativeState?: NativeVaultPayload }).Brain2NativeState;
-    if (nativeState) {
-      applyNativePayload(nativeState);
-    }
+    tryConsumeNativeWindowState();
+
+    const retryDelaysMs = isBrain2NativeAppShell()
+      ? [32, 120, 350, 800, 1600, 3200]
+      : [];
+    const timeoutIds = retryDelaysMs.map((ms) =>
+      window.setTimeout(() => {
+        tryConsumeNativeWindowState();
+      }, ms),
+    );
 
     return () => {
-      window.removeEventListener("brain2-native-vault-selected", handleNativeVaultSelection);
+      window.removeEventListener("brain2-native-vault-selected", onNativeVaultEvent);
+      window.removeEventListener("brain2-native-bridge-ready", onNativeVaultEvent);
+      timeoutIds.forEach(clearTimeout);
     };
   }, [applyVaultData, isAuthenticated]);
 
@@ -685,6 +721,8 @@ export default function Home() {
 
   const handleVaultChange = useCallback(() => {
     setHasNativeVaultData(false);
+    hasNativeVaultDataRef.current = false;
+    lastNativeVaultFingerprintRef.current = "";
     setHasCloudVaultData(false);
     void loadPresetVaultData({ force: true });
   }, [loadPresetVaultData]);

@@ -952,7 +952,13 @@ struct WebView: NSViewRepresentable {
                 window.Brain2NativeState = \(jsonString);
                 window.dispatchEvent(new CustomEvent('brain2-native-vault-selected', { detail: window.Brain2NativeState }));
                 """
-                self?.webView?.evaluateJavaScript(script, completionHandler: nil)
+                self?.webView?.evaluateJavaScript(script) { _, error in
+                    #if DEBUG
+                    if let error {
+                        NSLog("[Brain2 Native] evaluateJavaScript vault payload falhou: \(error.localizedDescription)")
+                    }
+                    #endif
+                }
             }
         }
 
