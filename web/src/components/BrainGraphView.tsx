@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import type { ComponentType, MutableRefObject } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X, Loader2 } from "lucide-react";
 import type { VaultGraph } from "@/lib/vault";
 import { forceCenter, forceX, forceY } from "d3-force-3d";
@@ -306,20 +306,70 @@ export default function BrainGraphView({
     [useVault, graphData.nodes.length, graphData.links.length]
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (loading) return;
     const el = containerRef.current;
-    if (!el || loading) return;
+    if (!el) return;
+
+    let rafId = 0;
+    let cancelled = false;
+
+    const isNativeShell =
+      typeof document !== "undefined" &&
+      document.documentElement.hasAttribute("data-brain2-native");
 
     const measure = () => {
-      const w = el.clientWidth;
-      const h = el.clientHeight;
-      if (w > 0 && h > 0) setDims({ w, h });
+      if (cancelled) return;
+      const rect = el.getBoundingClientRect();
+      let w = Math.round(rect.width);
+      let h = Math.round(rect.height);
+
+      if (w < 48 || h < 48) {
+        const root = el.closest(".brain-graph-root");
+        const outer = root?.getBoundingClientRect();
+        if (outer && outer.width >= 48 && outer.height >= 48) {
+          w = Math.round(outer.width);
+          h = Math.round(outer.height);
+        } else if (typeof window !== "undefined" && isNativeShell) {
+          const sidebarReserve = 300;
+          w = Math.max(w, Math.floor(window.innerWidth - sidebarReserve));
+          h = Math.max(h, window.innerHeight);
+        }
+      }
+
+      if (w > 0 && h > 0) {
+        setDims((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+      }
     };
 
     measure();
-    const ro = new ResizeObserver(measure);
+
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(measure);
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+
+    const onWinResize = () => {
+      requestAnimationFrame(measure);
+    };
+    window.addEventListener("resize", onWinResize);
+
+    const retryMs = isNativeShell
+      ? [16, 32, 64, 120, 240, 400, 700]
+      : [16, 48, 120];
+    const timeouts = retryMs.map((ms) =>
+      window.setTimeout(() => {
+        rafId = requestAnimationFrame(measure);
+      }, ms),
+    );
+
+    return () => {
+      cancelled = true;
+      ro.disconnect();
+      window.removeEventListener("resize", onWinResize);
+      timeouts.forEach(clearTimeout);
+      cancelAnimationFrame(rafId);
+    };
   }, [loading]);
 
   useEffect(() => {
@@ -490,10 +540,12 @@ export default function BrainGraphView({
   }, []);
 
   const onEngineStop = useCallback(() => {
-    if (fitDoneKey.current === graphKey) return;
-    fitDoneKey.current = graphKey;
+    if (dims.w < 48 || dims.h < 48) return;
+    const fitKey = `${graphKey}|${dims.w}x${dims.h}`;
+    if (fitDoneKey.current === fitKey) return;
+    fitDoneKey.current = fitKey;
     fgRef.current?.zoomToFit(480, 36);
-  }, [graphKey]);
+  }, [graphKey, dims.w, dims.h]);
 
   const onBackgroundClick = useCallback((_event: MouseEvent) => {
     setHoverId(null);
@@ -587,6 +639,8 @@ export default function BrainGraphView({
           position: relative;
           width: 100%;
           height: 100%;
+          min-width: 0;
+          min-height: 0;
           display: flex;
           flex-direction: column;
         }
@@ -651,6 +705,7 @@ export default function BrainGraphView({
         .brain-graph-container {
           flex: 1;
           width: 100%;
+          min-width: 0;
           min-height: 0;
           cursor: grab;
         }

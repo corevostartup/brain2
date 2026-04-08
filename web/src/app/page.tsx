@@ -875,7 +875,18 @@ export default function Home() {
 
     const match = vaultConversations.find((conversation) => {
       const normalizedTitle = conversation.title.trim().toLowerCase();
-      return normalizedTitle === normalizedNodeId || normalizedTitle === normalizedNodeLabel;
+      const pathLower = conversation.path.trim().toLowerCase();
+      const fileName = pathLower.split("/").pop() ?? "";
+      const fileStem = fileName.replace(/\.md$/i, "");
+      return (
+        normalizedTitle === normalizedNodeId ||
+        normalizedTitle === normalizedNodeLabel ||
+        pathLower === normalizedNodeId ||
+        fileName === normalizedNodeId ||
+        fileName === normalizedNodeLabel ||
+        fileStem === normalizedNodeId ||
+        fileStem === normalizedNodeLabel
+      );
     });
 
     if (match) {
