@@ -6,6 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { X, Loader2 } from "lucide-react";
 import type { VaultGraph } from "@/lib/vault";
 import { forceCenter, forceX, forceY } from "d3-force-3d";
+import { forceCollide } from "d3-force";
 import type {
   ForceGraphMethods,
   GraphData,
@@ -27,6 +28,7 @@ function clamp(value: number, min: number, max: number): number {
 // Física estilo “organismo”: molas + repulsão + inércia (via d3) + simulação mais longa
 const PHYSICS = {
   chargeStrength: -320,
+  nativeChargeStrength: -560,
   velocityDecay: 0.28,
   alphaDecay: 0.011,
   alphaMin: 0.006,
@@ -38,8 +40,11 @@ const PHYSICS = {
   warmupTicks: 140,
   cooldownMs: 22000,
   /** Ancora o conjunto no centro do espaço do grafo (0,0); o utilizador continua a poder pan/zoom na vista. */
-  centerStrength: 1,
+  centerStrength: 0.35,
+  nativeCenterStrength: 0.08,
   pullToOriginStrength: 0.045,
+  nativePullToOriginStrength: 0.012,
+  collidePadding: 7,
 };
 
 // ── Mock data ─────────────────────────────────────────────────────────
@@ -223,6 +228,11 @@ export default function BrainGraphView({
   const fitDoneKey = useRef<string>("");
   const dragAccumRef = useRef(0);
   const suppressClickUntil = useRef(0);
+  const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
+  const nativeSpreadRecoveryRef = useRef(false);
+  const isNativeShell =
+    typeof document !== "undefined" &&
+    document.documentElement.hasAttribute("data-brain2-native");
 
   const useVault = graph && graph.nodes.length > 0;
   const activeNodes = useMemo(
@@ -395,14 +405,35 @@ export default function BrainGraphView({
       }
 
       const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void };
-      charge?.strength?.(PHYSICS.chargeStrength);
+      charge?.strength?.(isNativeShell && useVault ? PHYSICS.nativeChargeStrength : PHYSICS.chargeStrength);
+
+      fg.d3Force(
+        "collide",
+        forceCollide((node) => {
+          const typedNode = node as unknown as { val?: number };
+          const r = Math.sqrt(Math.max(0, typedNode.val || 1)) * NODE_REL_SIZE;
+          return r + PHYSICS.collidePadding;
+        }).strength(useVault ? 0.95 : 0.72) as unknown as (alpha: number) => void
+      );
 
       fg.d3Force(
         "center",
-        forceCenter(0, 0, 0).strength(PHYSICS.centerStrength)
+        forceCenter(0, 0, 0).strength(
+          isNativeShell && useVault ? PHYSICS.nativeCenterStrength : PHYSICS.centerStrength
+        )
       );
-      fg.d3Force("x", forceX(0).strength(PHYSICS.pullToOriginStrength));
-      fg.d3Force("y", forceY(0).strength(PHYSICS.pullToOriginStrength));
+      fg.d3Force(
+        "x",
+        forceX(0).strength(
+          isNativeShell && useVault ? PHYSICS.nativePullToOriginStrength : PHYSICS.pullToOriginStrength
+        )
+      );
+      fg.d3Force(
+        "y",
+        forceY(0).strength(
+          isNativeShell && useVault ? PHYSICS.nativePullToOriginStrength : PHYSICS.pullToOriginStrength
+        )
+      );
 
       fg.d3ReheatSimulation();
     };
@@ -411,7 +442,77 @@ export default function BrainGraphView({
     return () => {
       cancelled = true;
     };
-  }, [graphData, graphKey, dims.w, dims.h]);
+  }, [graphData, graphKey, dims.w, dims.h, isNativeShell, useVault]);
+
+  useEffect(() => {
+    nativeSpreadRecoveryRef.current = false;
+  }, [graphKey]);
+
+  useEffect(() => {
+    if (!isNativeShell || !useVault || dims.w < 64 || dims.h < 64) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const fg = fgRef.current;
+      const snapshot = (fg as unknown as {
+        graphData?: () => GraphData<BrainNode, BrainLink>;
+      })?.graphData?.();
+      const nodes = (snapshot?.nodes ?? []) as Array<NodeObject<BrainNode>>;
+
+      if (nodes.length < 18) {
+        return;
+      }
+
+      let minX = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      let validCount = 0;
+
+      for (const node of nodes) {
+        const x = node.x;
+        const y = node.y;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          continue;
+        }
+        validCount += 1;
+        minX = Math.min(minX, x!);
+        maxX = Math.max(maxX, x!);
+        minY = Math.min(minY, y!);
+        maxY = Math.max(maxY, y!);
+      }
+
+      if (validCount < 18 || nativeSpreadRecoveryRef.current) {
+        return;
+      }
+
+      const spreadW = Math.max(0, maxX - minX);
+      const spreadH = Math.max(0, maxY - minY);
+      const minExpectedSpread = Math.min(dims.w, dims.h) * 0.16;
+      const visiblyClustered = spreadW < minExpectedSpread && spreadH < minExpectedSpread;
+
+      if (!visiblyClustered) {
+        return;
+      }
+
+      nativeSpreadRecoveryRef.current = true;
+      const charge = fg?.d3Force("charge") as unknown as { strength?: (v: number) => void } | undefined;
+      charge?.strength?.(PHYSICS.nativeChargeStrength * 1.18);
+      fg?.d3Force("center", forceCenter(0, 0, 0).strength(PHYSICS.nativeCenterStrength * 0.35));
+      fg?.d3Force("x", forceX(0).strength(PHYSICS.nativePullToOriginStrength * 0.35));
+      fg?.d3Force("y", forceY(0).strength(PHYSICS.nativePullToOriginStrength * 0.35));
+      fg?.d3ReheatSimulation();
+
+      window.setTimeout(() => {
+        fg?.zoomToFit(500, 38);
+      }, 360);
+    }, 1400);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [dims.h, dims.w, graphKey, isNativeShell, useVault]);
 
   const highlightSet = useMemo(() => {
     if (!hoverId) return null as Set<string> | null;
@@ -519,9 +620,20 @@ export default function BrainGraphView({
     (node: NodeObject<BrainNode>, _event: MouseEvent) => {
       if (performance.now() < suppressClickUntil.current) return;
       if (!onOpenConversationFromNode) return;
+      if (isNativeShell) {
+        const now = performance.now();
+        const nodeId = String(node.id);
+        const last = lastNodeClickRef.current;
+        const isDoubleClick = last && last.id === nodeId && now - last.at <= 320;
+        if (!isDoubleClick) {
+          lastNodeClickRef.current = { id: nodeId, at: now };
+          return;
+        }
+        lastNodeClickRef.current = null;
+      }
       onOpenConversationFromNode(String(node.id), node.name);
     },
-    [onOpenConversationFromNode]
+    [isNativeShell, onOpenConversationFromNode]
   );
 
   const onNodeDrag = useCallback(
