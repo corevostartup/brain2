@@ -269,7 +269,7 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
         }
 
         .chat-content-column {
-          max-width: 42rem;
+          max-width: 950px;
           width: 100%;
           margin: 0 auto;
           display: flex;

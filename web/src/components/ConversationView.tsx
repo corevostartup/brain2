@@ -324,7 +324,7 @@ export default function ConversationView({ conversation, onClose }: Conversation
         }
 
         .messages-content-column {
-          max-width: 42rem;
+          max-width: 950px;
           width: 100%;
           margin: 0 auto;
           display: flex;
