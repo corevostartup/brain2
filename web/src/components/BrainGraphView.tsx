@@ -6,7 +6,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { X, Loader2 } from "lucide-react";
 import type { VaultGraph } from "@/lib/vault";
 import { forceCenter, forceX, forceY } from "d3-force-3d";
-import { forceCollide } from "d3-force";
 import type {
   ForceGraphMethods,
   GraphData,
@@ -32,6 +31,8 @@ const PHYSICS = {
   velocityDecay: 0.28,
   alphaDecay: 0.011,
   alphaMin: 0.006,
+  nativeAlphaDecay: 0.004,
+  nativeAlphaMin: 0.0015,
   baseLinkDistance: 92,
   degreeDistanceBoost: 20,
   degreeMismatchBoost: 3,
@@ -39,12 +40,12 @@ const PHYSICS = {
   linkStrengthMax: 0.95,
   warmupTicks: 140,
   cooldownMs: 22000,
+  nativeCooldownMs: 120000,
   /** Ancora o conjunto no centro do espaço do grafo (0,0); o utilizador continua a poder pan/zoom na vista. */
   centerStrength: 0.35,
   nativeCenterStrength: 0.08,
   pullToOriginStrength: 0.045,
   nativePullToOriginStrength: 0.012,
-  collidePadding: 7,
 };
 
 // ── Mock data ─────────────────────────────────────────────────────────
@@ -228,7 +229,6 @@ export default function BrainGraphView({
   const fitDoneKey = useRef<string>("");
   const dragAccumRef = useRef(0);
   const suppressClickUntil = useRef(0);
-  const lastNodeClickRef = useRef<{ id: string; at: number } | null>(null);
   const nativeSpreadRecoveryRef = useRef(false);
   const isNativeShell =
     typeof document !== "undefined" &&
@@ -283,6 +283,7 @@ export default function BrainGraphView({
       const t = (index + 1) / Math.max(1, activeNodes.length);
       const r = Math.sqrt(t) * baseRadius;
       const a = index * goldenAngle;
+      const nativeKick = isNativeShell && useVault ? 0.75 : 0.18;
       return {
         id: n.id,
         name: n.label,
@@ -291,8 +292,8 @@ export default function BrainGraphView({
         // Evita "nascer no centro" no WKWebView quando a simulação não aquece bem.
         x: r * Math.cos(a),
         y: r * Math.sin(a),
-        vx: 0,
-        vy: 0,
+        vx: Math.cos(a + Math.PI / 2) * nativeKick,
+        vy: Math.sin(a + Math.PI / 2) * nativeKick,
       };
     });
 
@@ -319,7 +320,7 @@ export default function BrainGraphView({
     });
 
     return { nodes, links };
-  }, [activeNodes, activeEdges, degreeMap, groupMap, dims.h, dims.w]);
+  }, [activeNodes, activeEdges, degreeMap, groupMap, dims.h, dims.w, isNativeShell, useVault]);
 
   const graphKey = useMemo(
     () => `${useVault ? "v" : "m"}-${graphData.nodes.length}-${graphData.links.length}`,
@@ -418,15 +419,6 @@ export default function BrainGraphView({
       charge?.strength?.(isNativeShell && useVault ? PHYSICS.nativeChargeStrength : PHYSICS.chargeStrength);
 
       fg.d3Force(
-        "collide",
-        forceCollide((node) => {
-          const typedNode = node as unknown as { val?: number };
-          const r = Math.sqrt(Math.max(0, typedNode.val || 1)) * NODE_REL_SIZE;
-          return r + PHYSICS.collidePadding;
-        }).strength(useVault ? 0.95 : 0.72) as unknown as (alpha: number) => void
-      );
-
-      fg.d3Force(
         "center",
         forceCenter(0, 0, 0).strength(
           isNativeShell && useVault ? PHYSICS.nativeCenterStrength : PHYSICS.centerStrength
@@ -457,6 +449,18 @@ export default function BrainGraphView({
   useEffect(() => {
     nativeSpreadRecoveryRef.current = false;
   }, [graphKey]);
+
+  useEffect(() => {
+    if (!isNativeShell || !useVault) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      fgRef.current?.d3ReheatSimulation();
+    }, 2400);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [graphKey, isNativeShell, useVault]);
 
   useEffect(() => {
     if (!isNativeShell || !useVault || dims.w < 64 || dims.h < 64) {
@@ -631,19 +635,14 @@ export default function BrainGraphView({
       if (performance.now() < suppressClickUntil.current) return;
       if (!onOpenConversationFromNode) return;
       if (isNativeShell) {
-        const now = performance.now();
-        const nodeId = String(node.id);
-        const last = lastNodeClickRef.current;
-        const isDoubleClick = last && last.id === nodeId && now - last.at <= 320;
-        if (!isDoubleClick) {
-          lastNodeClickRef.current = { id: nodeId, at: now };
-          return;
-        }
-        lastNodeClickRef.current = null;
+        const id = String(node.id);
+        setHoverId(id);
+        updateLinkHighlight(id);
+        return;
       }
       onOpenConversationFromNode(String(node.id), node.name);
     },
-    [isNativeShell, onOpenConversationFromNode]
+    [isNativeShell, onOpenConversationFromNode, updateLinkHighlight]
   );
 
   const onNodeDrag = useCallback(
@@ -735,10 +734,10 @@ export default function BrainGraphView({
               linkWidth={linkWidth}
               linkDirectionalParticles={0}
               d3VelocityDecay={PHYSICS.velocityDecay}
-              d3AlphaDecay={PHYSICS.alphaDecay}
-              d3AlphaMin={PHYSICS.alphaMin}
+              d3AlphaDecay={isNativeShell && useVault ? PHYSICS.nativeAlphaDecay : PHYSICS.alphaDecay}
+              d3AlphaMin={isNativeShell && useVault ? PHYSICS.nativeAlphaMin : PHYSICS.alphaMin}
               warmupTicks={PHYSICS.warmupTicks}
-              cooldownTime={PHYSICS.cooldownMs}
+              cooldownTime={isNativeShell && useVault ? PHYSICS.nativeCooldownMs : PHYSICS.cooldownMs}
               enableNodeDrag
               enableZoomInteraction
               enablePanInteraction
