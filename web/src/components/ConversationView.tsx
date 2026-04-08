@@ -212,40 +212,42 @@ export default function ConversationView({ conversation, onClose }: Conversation
       </header>
 
       <div className="messages-scroll" role="log" aria-label="Mensagens da conversa">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`message-row${message.role === "user" ? " message-row--user" : ""}`}
-          >
-            <article
-              className={`message-bubble${message.role === "user" ? " message-bubble--user" : ""}`}
+        <div className="messages-content-column">
+          {messages.map((message) => (
+            <div
+              key={message.id}
+              className={`message-row${message.role === "user" ? " message-row--user" : ""}`}
             >
-              <p>{message.content}</p>
-              {message.role === "assistant" && (
-                <div className="message-actions" aria-label="Ações da resposta">
-                  <button
-                    className="message-action-btn"
-                    type="button"
-                    onClick={() => copyMessage(message.id, message.content)}
-                    aria-label="Copiar resposta"
-                    title="Copiar resposta"
-                  >
-                    {copiedMessageId === message.id ? <Check size={14} /> : <Copy size={14} />}
-                  </button>
-                  <button
-                    className="message-action-btn message-action-btn--disabled"
-                    type="button"
-                    aria-label="Ouvir resposta (em breve)"
-                    title="Ouvir resposta (em breve)"
-                    disabled
-                  >
-                    <Volume2 size={14} />
-                  </button>
-                </div>
-              )}
-            </article>
-          </div>
-        ))}
+              <article
+                className={`message-bubble${message.role === "user" ? " message-bubble--user" : ""}`}
+              >
+                <p>{message.content}</p>
+                {message.role === "assistant" && (
+                  <div className="message-actions" aria-label="Ações da resposta">
+                    <button
+                      className="message-action-btn"
+                      type="button"
+                      onClick={() => copyMessage(message.id, message.content)}
+                      aria-label="Copiar resposta"
+                      title="Copiar resposta"
+                    >
+                      {copiedMessageId === message.id ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
+                    <button
+                      className="message-action-btn message-action-btn--disabled"
+                      type="button"
+                      aria-label="Ouvir resposta (em breve)"
+                      title="Ouvir resposta (em breve)"
+                      disabled
+                    >
+                      <Volume2 size={14} />
+                    </button>
+                  </div>
+                )}
+              </article>
+            </div>
+          ))}
+        </div>
       </div>
 
       <style jsx>{`
@@ -315,13 +317,19 @@ export default function ConversationView({ conversation, onClose }: Conversation
           flex: 1;
           min-height: 0;
           overflow-y: auto;
-          padding: 28px 24px 180px;
-          display: flex;
-          flex-direction: column;
-          gap: 14px;
+          padding: 28px clamp(16px, 4vw, 40px) 180px;
           user-select: text;
           -webkit-user-select: text;
           -webkit-touch-callout: default;
+        }
+
+        .messages-content-column {
+          max-width: 42rem;
+          width: 100%;
+          margin: 0 auto;
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
         }
 
         .message-row {
@@ -340,7 +348,8 @@ export default function ConversationView({ conversation, onClose }: Conversation
           background: transparent;
           border: none;
           padding: 0;
-          width: min(760px, 100%);
+          width: 100%;
+          max-width: 100%;
           text-align: left;
         }
 
@@ -405,7 +414,7 @@ export default function ConversationView({ conversation, onClose }: Conversation
           }
 
           .messages-scroll {
-            padding: 18px 14px 170px;
+            padding: 18px clamp(14px, 4vw, 24px) 170px;
           }
         }
       `}</style>

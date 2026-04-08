@@ -154,70 +154,72 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
       </header>
 
       <section className="chat-scroll" aria-label="Conversa do Brain">
-        {messages.length === 0 && !loading && !error && (
-          <div className="chat-empty">
-            <h3>Comece uma conversa</h3>
-            <p>Pergunte qualquer coisa ao Brain2 na barra inferior.</p>
-          </div>
-        )}
+        <div className="chat-content-column">
+          {messages.length === 0 && !loading && !error && (
+            <div className="chat-empty">
+              <h3>Comece uma conversa</h3>
+              <p>Pergunte qualquer coisa ao Brain2 na barra inferior.</p>
+            </div>
+          )}
 
-        {messages.map((message) => {
-          const isTypingMessage = message.id === typingMessageId || message.id === pendingTypingId;
-          const visibleContent = isTypingMessage ? typingText : message.content;
+          {messages.map((message) => {
+            const isTypingMessage = message.id === typingMessageId || message.id === pendingTypingId;
+            const visibleContent = isTypingMessage ? typingText : message.content;
 
-          return (
-            <div key={message.id} className={`chat-row chat-row--${message.role}`}>
-              <article className={`chat-message chat-message--${message.role}`}>
-                <h4>{roleLabel(message.role)}</h4>
-                <p>
-                  {visibleContent}
-                  {isTypingMessage && <span className="typing-caret" aria-hidden>|</span>}
-                </p>
-                {message.role === "assistant" && (
-                  <div className="message-actions" aria-label="Ações da resposta">
-                    <button
-                      className="message-action-btn"
-                      type="button"
-                      onClick={() => copyMessage(message.id, message.content)}
-                      aria-label="Copiar resposta"
-                      title="Copiar resposta"
-                    >
-                      {copiedMessageId === message.id ? <Check size={14} /> : <Copy size={14} />}
-                    </button>
-                    <button
-                      className="message-action-btn message-action-btn--disabled"
-                      type="button"
-                      aria-label="Ouvir resposta (em breve)"
-                      title="Ouvir resposta (em breve)"
-                      disabled
-                    >
-                      <Volume2 size={14} />
-                    </button>
-                  </div>
-                )}
+            return (
+              <div key={message.id} className={`chat-row chat-row--${message.role}`}>
+                <article className={`chat-message chat-message--${message.role}`}>
+                  <h4>{roleLabel(message.role)}</h4>
+                  <p>
+                    {visibleContent}
+                    {isTypingMessage && <span className="typing-caret" aria-hidden>|</span>}
+                  </p>
+                  {message.role === "assistant" && (
+                    <div className="message-actions" aria-label="Ações da resposta">
+                      <button
+                        className="message-action-btn"
+                        type="button"
+                        onClick={() => copyMessage(message.id, message.content)}
+                        aria-label="Copiar resposta"
+                        title="Copiar resposta"
+                      >
+                        {copiedMessageId === message.id ? <Check size={14} /> : <Copy size={14} />}
+                      </button>
+                      <button
+                        className="message-action-btn message-action-btn--disabled"
+                        type="button"
+                        aria-label="Ouvir resposta (em breve)"
+                        title="Ouvir resposta (em breve)"
+                        disabled
+                      >
+                        <Volume2 size={14} />
+                      </button>
+                    </div>
+                  )}
+                </article>
+              </div>
+            );
+          })}
+
+          {loading && (
+            <div className="chat-row chat-row--assistant">
+              <article className="chat-message chat-message--assistant">
+                <h4>Brain</h4>
+                <p>Escrevendo resposta...</p>
               </article>
             </div>
-          );
-        })}
+          )}
 
-        {loading && (
-          <div className="chat-row chat-row--assistant">
-            <article className="chat-message chat-message--assistant">
-              <h4>Brain</h4>
-              <p>Escrevendo resposta...</p>
-            </article>
-          </div>
-        )}
+          {error && (
+            <div className="chat-row chat-row--assistant">
+              <article className="chat-error" role="alert">
+                {error}
+              </article>
+            </div>
+          )}
 
-        {error && (
-          <div className="chat-row chat-row--assistant">
-            <article className="chat-error" role="alert">
-              {error}
-            </article>
-          </div>
-        )}
-
-        <div ref={endRef} />
+          <div ref={endRef} />
+        </div>
       </section>
 
       <style jsx>{`
@@ -260,13 +262,19 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
           flex: 1;
           min-height: 0;
           overflow-y: auto;
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-          padding: 8px 24px 170px;
+          padding: 8px clamp(16px, 4vw, 40px) 170px;
           user-select: text;
           -webkit-user-select: text;
           -webkit-touch-callout: default;
+        }
+
+        .chat-content-column {
+          max-width: 42rem;
+          width: 100%;
+          margin: 0 auto;
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
         }
 
         .chat-empty h3 {
@@ -295,7 +303,8 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
         }
 
         .chat-message {
-          width: min(840px, 100%);
+          width: 100%;
+          max-width: 100%;
           display: flex;
           flex-direction: column;
           gap: 6px;
@@ -383,7 +392,8 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
         }
 
         .chat-error {
-          width: min(840px, 100%);
+          width: 100%;
+          max-width: 100%;
           font-family: 'Inter', sans-serif;
           font-size: 12px;
           color: #d97a7a;
@@ -395,7 +405,7 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
           }
 
           .chat-scroll {
-            padding: 8px 14px 160px;
+            padding: 8px clamp(14px, 4vw, 24px) 160px;
           }
         }
       `}</style>
