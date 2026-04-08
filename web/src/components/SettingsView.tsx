@@ -17,8 +17,9 @@ import {
   CLOUD_PROVIDER_STORAGE_KEY,
   getCloudDirectoryLabelStorageKey,
   getCloudDirectoryStorageKey,
-  normalizeCloudProvider,
+  getVaultStorageMode,
   type CloudProvider,
+  type VaultStorageMode,
 } from "@/lib/vaultCloudConfig";
 
 type SettingsViewProps = {
@@ -26,7 +27,7 @@ type SettingsViewProps = {
   onVaultChange: (handle: FileSystemDirectoryHandle | null) => void;
   vaultHandle: FileSystemDirectoryHandle | null;
   nativeVaultPath?: string;
-  /** Chamado apos salvar pasta Google Drive / nuvem para recarregar o vault na app. */
+  /** Chamado apos alterar origem do vault (Drive, iCloud, local) ou guardar pasta na nuvem. */
   onCloudVaultSaved?: () => void;
 };
 
@@ -67,12 +68,11 @@ function applyThemeToDocument(theme: ThemeMode): void {
   }
 }
 
-function resolveInitialCloudProvider(): CloudProvider {
+function resolveInitialVaultStorageMode(): VaultStorageMode {
   if (typeof window === "undefined") {
-    return "google-drive";
+    return "local";
   }
-
-  return normalizeCloudProvider(window.localStorage.getItem(CLOUD_PROVIDER_STORAGE_KEY));
+  return getVaultStorageMode();
 }
 
 function parseGoogleDriveFolderId(input: string): string | null {
@@ -127,7 +127,7 @@ export default function SettingsView({
   const [pasteSaved, setPasteSaved] = useState(false);
   const [nativePickerAvailable, setNativePickerAvailable] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>(() => resolveInitialTheme());
-  const [cloudProvider, setCloudProvider] = useState<CloudProvider>(() => resolveInitialCloudProvider());
+  const [vaultStorageMode, setVaultStorageMode] = useState<VaultStorageMode>(() => resolveInitialVaultStorageMode());
   const [cloudDirectory, setCloudDirectory] = useState("");
   const [cloudDirectoryLabel, setCloudDirectoryLabel] = useState("");
   const [cloudStatus, setCloudStatus] = useState<"idle" | "saved" | "error">("idle");
@@ -186,8 +186,13 @@ export default function SettingsView({
       return;
     }
 
-    const savedDirectory = window.localStorage.getItem(getCloudDirectoryStorageKey(cloudProvider)) ?? "";
-    const savedDirectoryLabel = window.localStorage.getItem(getCloudDirectoryLabelStorageKey(cloudProvider)) ?? "";
+    if (vaultStorageMode !== "google-drive" && vaultStorageMode !== "icloud") {
+      return;
+    }
+
+    const cloudKey: CloudProvider = vaultStorageMode === "icloud" ? "icloud" : "google-drive";
+    const savedDirectory = window.localStorage.getItem(getCloudDirectoryStorageKey(cloudKey)) ?? "";
+    const savedDirectoryLabel = window.localStorage.getItem(getCloudDirectoryLabelStorageKey(cloudKey)) ?? "";
     setCloudDirectory(savedDirectory);
     setCloudDirectoryLabel(savedDirectoryLabel);
     setCloudStatus("idle");
@@ -196,7 +201,7 @@ export default function SettingsView({
     setGoogleDrivePickerError("");
     setGoogleDriveSearch("");
     setGoogleDriveSelectedFolderId(null);
-  }, [cloudProvider]);
+  }, [vaultStorageMode]);
 
   useEffect(() => {
     if (!hasVaultSelection) {
@@ -379,11 +384,12 @@ export default function SettingsView({
     }
   };
 
-  const handleCloudProviderChange = (provider: CloudProvider) => {
-    setCloudProvider(provider);
+  const handleVaultStorageModeChange = (mode: VaultStorageMode) => {
+    setVaultStorageMode(mode);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(CLOUD_PROVIDER_STORAGE_KEY, provider);
+      window.localStorage.setItem(CLOUD_PROVIDER_STORAGE_KEY, mode);
     }
+    onCloudVaultSaved?.();
   };
 
   const persistCloudDirectorySelection = (provider: CloudProvider, value: string, label: string) => {
@@ -424,8 +430,12 @@ export default function SettingsView({
   };
 
   const handleCloudDirectoryChoose = () => {
-    if (cloudProvider === "google-drive") {
+    if (vaultStorageMode === "google-drive") {
       void fetchGoogleDriveFolders(true);
+      return;
+    }
+
+    if (vaultStorageMode !== "icloud") {
       return;
     }
 
@@ -466,13 +476,13 @@ export default function SettingsView({
     const rawValue = cloudDirectory.trim();
     if (!rawValue) {
       setCloudStatus("error");
-      setCloudError("Informe um diretorio da nuvem antes de salvar.");
+      setCloudError("Informe um diretorio antes de salvar.");
       return;
     }
 
     let normalizedValue = rawValue;
     let normalizedLabel = cloudDirectoryLabel.trim();
-    if (cloudProvider === "google-drive") {
+    if (vaultStorageMode === "google-drive") {
       const folderId = parseGoogleDriveFolderId(rawValue);
       if (!folderId) {
         setCloudStatus("error");
@@ -487,7 +497,8 @@ export default function SettingsView({
       }
     }
 
-    persistCloudDirectorySelection(cloudProvider, normalizedValue, normalizedLabel);
+    const activeCloud: CloudProvider = vaultStorageMode === "icloud" ? "icloud" : "google-drive";
+    persistCloudDirectorySelection(activeCloud, normalizedValue, normalizedLabel);
 
     setCloudDirectory(normalizedValue);
     setCloudDirectoryLabel(normalizedLabel);
@@ -497,8 +508,9 @@ export default function SettingsView({
     window.setTimeout(() => setCloudStatus("idle"), 1800);
   };
 
-  const cloudProviderLabel = cloudProvider === "google-drive" ? "Google Drive" : "iCloud";
-  const cloudDirectoryPlaceholder = cloudProvider === "google-drive"
+  const cloudProviderLabel =
+    vaultStorageMode === "google-drive" ? "Google Drive" : vaultStorageMode === "icloud" ? "iCloud" : "";
+  const cloudDirectoryPlaceholder = vaultStorageMode === "google-drive"
     ? "https://drive.google.com/drive/folders/... ou ID da pasta"
     : "iCloud Drive/Brain2/Vault";
   const selectedGoogleDriveFolder = googleDriveSelectedFolderId
@@ -519,160 +531,20 @@ export default function SettingsView({
       </div>
 
       <div className="settings-content">
-        <section className="settings-section">
+        <section className="settings-section appearance-section">
           <h3>Vault</h3>
           <p className="settings-description">
-            Escolha o diretório onde seus arquivos <code>.md</code> (Markdown) estão armazenados.
-            As conexões <code>{"[[wikilinks]]"}</code> serão usadas para gerar o grafo do Your Brain.
+            Escolha uma origem para os ficheiros <code>.md</code>. Apenas uma opcao fica ativa. Os{" "}
+            <code>{"[[wikilinks]]"}</code> alimentam o grafo do Your Brain.
           </p>
 
-          {nativePickerAvailable && (
-            <div className="native-picker-box">
-              <button className="native-picker-btn" onClick={handlePickDirectory}>
-                Escolher diretório via app Swift
-              </button>
-              <p className="native-picker-hint">
-                Usa o seletor nativo do macOS e atualiza Pastas e Your Brain automaticamente.
-              </p>
-            </div>
-          )}
-
-          {hasVaultSelection ? (
-            <div className="vault-current">
-              <div className="vault-current-info">
-                <FolderOpen size={14} strokeWidth={1.8} />
-                <input
-                  className="vault-path-input"
-                  type="text"
-                  value={displayedVaultPath}
-                  placeholder="Caminho do vault"
-                  spellCheck={false}
-                  readOnly
-                />
-                {status === "saved" && (
-                  <span className="vault-saved-badge">
-                    <Check size={11} strokeWidth={2} />
-                    Salvo
-                  </span>
-                )}
-              </div>
-              <div className="vault-current-actions">
-                <button
-                  className="vault-change-btn"
-                  onClick={handlePickDirectory}
-                >
-                  Alterar
-                </button>
-                {!nativePickerAvailable && (
-                  <button
-                    className="vault-remove-btn"
-                    onClick={handleRemoveVault}
-                    aria-label="Remover vault"
-                  >
-                    <Trash2 size={13} strokeWidth={1.8} />
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="vault-empty">
-              <div className="vault-paste-row">
-                <label className={`vault-paste-field${pasteSaved ? " vault-paste-field--saved" : ""}`}>
-                  <button
-                    className="vault-folder-icon-btn"
-                    type="button"
-                    onClick={handlePickDirectory}
-                    aria-label="Escolher diretório"
-                    title="Escolher diretório"
-                  >
-                    <FolderOpen size={14} strokeWidth={1.8} />
-                  </button>
-                  <input
-                    type="text"
-                    value={vaultPath}
-                    onChange={handlePathChange}
-                    placeholder="/Users/seu-usuario/Documents/MeuVault"
-                    spellCheck={false}
-                    readOnly={pasteSaved}
-                  />
-                </label>
-                {pasteSaved ? (
-                  <button
-                    className="vault-paste-saved-btn"
-                    onClick={() => setPasteSaved(false)}
-                  >
-                    <Check size={13} strokeWidth={2} />
-                    Salvo
-                  </button>
-                ) : (
-                  <button
-                    className="vault-paste-save-btn"
-                    onClick={handlePasteSave}
-                    disabled={!vaultPath.trim()}
-                  >
-                    Salvar
-                  </button>
-                )}
-              </div>
-              {status === "error" && (
-                <p className="vault-error-hint">Selecione um diretório no icone de pasta antes de salvar.</p>
-              )}
-            </div>
-          )}
-
-          <p className="vault-hint">
-            Compatível com vaults do Obsidian e qualquer pasta com arquivos <code>.md</code>.
-          </p>
-
-          <div className="vault-rename-box">
-            <p className="vault-rename-title">Nome do Vault</p>
-            <div className="vault-rename-row">
-              <input
-                className="vault-rename-input"
-                type="text"
-                value={vaultRenameName}
-                onChange={handleVaultRenameChange}
-                placeholder="Novo nome da pasta do vault"
-                spellCheck={false}
-                disabled={!hasVaultSelection || vaultRenameStatus === "renaming"}
-              />
-              <button
-                className="vault-rename-btn"
-                onClick={() => { void handleVaultRename(); }}
-                disabled={!hasVaultSelection || !vaultRenameName.trim() || vaultRenameStatus === "renaming"}
-              >
-                {vaultRenameStatus === "renaming" ? "Renomeando..." : "Renomear"}
-              </button>
-            </div>
-            {!hasVaultSelection ? (
-              <p className="vault-hint">Selecione um vault para habilitar a renomeacao.</p>
-            ) : vaultRenameStatus === "saved" ? (
-              <p className="vault-success-hint">Nome do vault atualizado com sucesso.</p>
-            ) : vaultRenameStatus === "error" ? (
-              <p className="vault-error-hint">{vaultRenameError}</p>
-            ) : (
-              <p className="vault-hint">A alteracao atualiza o nome da pasta raiz do vault.</p>
-            )}
-          </div>
-        </section>
-
-        <section className="settings-section appearance-section">
-          <h3>Nuvem</h3>
-          <p className="settings-description">
-            A pasta escolhida aqui passa a ser o vault ativo: menu lateral (pastas e conversas) e Your Brain usam os arquivos{" "}
-            <code>.md</code> dessa pasta no Google Drive. O escopo atual e somente leitura; gravar conversas no Drive ainda nao esta disponivel.
-          </p>
-          <p className="settings-description">
-            Escolha um diretorio de trabalho na nuvem para uso web.
-          </p>
-
-          <div className="cloud-provider-grid" role="radiogroup" aria-label="Provedor de nuvem">
+          <div className="vault-source-grid" role="radiogroup" aria-label="Origem do vault">
             <button
               type="button"
               role="radio"
-              aria-checked={cloudProvider === "google-drive"}
-              className={`cloud-provider-btn${cloudProvider === "google-drive" ? " cloud-provider-btn--active" : ""}`}
-              onClick={() => handleCloudProviderChange("google-drive")}
+              aria-checked={vaultStorageMode === "google-drive"}
+              className={`cloud-provider-btn${vaultStorageMode === "google-drive" ? " cloud-provider-btn--active" : ""}`}
+              onClick={() => handleVaultStorageModeChange("google-drive")}
             >
               <Cloud size={14} strokeWidth={1.8} />
               <span>Google Drive</span>
@@ -680,66 +552,220 @@ export default function SettingsView({
             <button
               type="button"
               role="radio"
-              aria-checked={cloudProvider === "icloud"}
-              className={`cloud-provider-btn${cloudProvider === "icloud" ? " cloud-provider-btn--active" : ""}`}
-              onClick={() => handleCloudProviderChange("icloud")}
+              aria-checked={vaultStorageMode === "icloud"}
+              className={`cloud-provider-btn${vaultStorageMode === "icloud" ? " cloud-provider-btn--active" : ""}`}
+              onClick={() => handleVaultStorageModeChange("icloud")}
             >
               <Cloud size={14} strokeWidth={1.8} />
               <span>iCloud</span>
             </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={vaultStorageMode === "local"}
+              className={`cloud-provider-btn${vaultStorageMode === "local" ? " cloud-provider-btn--active" : ""}`}
+              onClick={() => handleVaultStorageModeChange("local")}
+            >
+              <FolderOpen size={14} strokeWidth={1.8} />
+              <span>Local</span>
+            </button>
           </div>
 
-          <div className="cloud-directory-box">
-            <p className="cloud-directory-title">Diretorio em {cloudProviderLabel}</p>
-            <div className="cloud-directory-row">
-              <input
-                className="cloud-directory-input"
-                type="text"
-                value={cloudDirectory}
-                onChange={(event) => {
-                  setCloudDirectory(event.target.value);
-                  if (cloudStatus !== "idle") {
-                    setCloudStatus("idle");
-                    setCloudError("");
-                  }
-                }}
-                placeholder={cloudDirectoryPlaceholder}
-                spellCheck={false}
-              />
-              <button
-                className="cloud-directory-pick-btn"
-                type="button"
-                onClick={handleCloudDirectoryChoose}
-                disabled={googleDriveLoading && cloudProvider === "google-drive"}
-              >
-                {googleDriveLoading && cloudProvider === "google-drive" ? "Conectando..." : "Escolher diretorio"}
-              </button>
-              <button
-                className="cloud-directory-save-btn"
-                type="button"
-                onClick={handleCloudDirectorySave}
-                disabled={!cloudDirectory.trim()}
-              >
-                Salvar
-              </button>
-            </div>
-
-            {cloudProvider === "google-drive" && cloudDirectoryLabel.trim() && (
-              <p className="vault-hint">Pasta selecionada: {cloudDirectoryLabel}</p>
-            )}
-
-            {cloudStatus === "saved" ? (
-              <p className="vault-success-hint">Diretorio de nuvem salvo com sucesso.</p>
-            ) : cloudStatus === "error" ? (
-              <p className="vault-error-hint">{cloudError}</p>
-            ) : (
-              <p className="vault-hint">
-                {cloudProvider === "google-drive"
-                  ? "Use Escolher diretorio para autenticar no Google Drive e selecionar uma pasta privada ou compartilhada."
-                  : "Para iCloud, informe o caminho/identificador da pasta que deseja usar."}
+          {vaultStorageMode === "local" && (
+            <>
+              <p className="settings-description settings-description--tight">
+                Pasta no disco: app macOS (seletor Swift) ou navegador (File System Access). Compativel com vaults Obsidian.
               </p>
-            )}
-          </div>
+
+              {nativePickerAvailable && (
+                <div className="native-picker-box">
+                  <button className="native-picker-btn" onClick={handlePickDirectory}>
+                    Escolher diretório via app Swift
+                  </button>
+                  <p className="native-picker-hint">
+                    Usa o seletor nativo do macOS e atualiza Pastas e Your Brain automaticamente.
+                  </p>
+                </div>
+              )}
+
+              {hasVaultSelection ? (
+                <div className="vault-current">
+                  <div className="vault-current-info">
+                    <FolderOpen size={14} strokeWidth={1.8} />
+                    <input
+                      className="vault-path-input"
+                      type="text"
+                      value={displayedVaultPath}
+                      placeholder="Caminho do vault"
+                      spellCheck={false}
+                      readOnly
+                    />
+                    {status === "saved" && (
+                      <span className="vault-saved-badge">
+                        <Check size={11} strokeWidth={2} />
+                        Salvo
+                      </span>
+                    )}
+                  </div>
+                  <div className="vault-current-actions">
+                    <button className="vault-change-btn" onClick={handlePickDirectory} type="button">
+                      Alterar
+                    </button>
+                    {!nativePickerAvailable && (
+                      <button
+                        className="vault-remove-btn"
+                        onClick={handleRemoveVault}
+                        aria-label="Remover vault"
+                        type="button"
+                      >
+                        <Trash2 size={13} strokeWidth={1.8} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="vault-empty">
+                  <div className="vault-paste-row">
+                    <label className={`vault-paste-field${pasteSaved ? " vault-paste-field--saved" : ""}`}>
+                      <button
+                        className="vault-folder-icon-btn"
+                        type="button"
+                        onClick={handlePickDirectory}
+                        aria-label="Escolher diretório"
+                        title="Escolher diretório"
+                      >
+                        <FolderOpen size={14} strokeWidth={1.8} />
+                      </button>
+                      <input
+                        type="text"
+                        value={vaultPath}
+                        onChange={handlePathChange}
+                        placeholder="/Users/seu-usuario/Documents/MeuVault"
+                        spellCheck={false}
+                        readOnly={pasteSaved}
+                      />
+                    </label>
+                    {pasteSaved ? (
+                      <button
+                        className="vault-paste-saved-btn"
+                        type="button"
+                        onClick={() => setPasteSaved(false)}
+                      >
+                        <Check size={13} strokeWidth={2} />
+                        Salvo
+                      </button>
+                    ) : (
+                      <button
+                        className="vault-paste-save-btn"
+                        type="button"
+                        onClick={handlePasteSave}
+                        disabled={!vaultPath.trim()}
+                      >
+                        Salvar
+                      </button>
+                    )}
+                  </div>
+                  {status === "error" && (
+                    <p className="vault-error-hint">Selecione um diretório no icone de pasta antes de salvar.</p>
+                  )}
+                </div>
+              )}
+
+              <div className="vault-rename-box">
+                <p className="vault-rename-title">Nome do Vault</p>
+                <div className="vault-rename-row">
+                  <input
+                    className="vault-rename-input"
+                    type="text"
+                    value={vaultRenameName}
+                    onChange={handleVaultRenameChange}
+                    placeholder="Novo nome da pasta do vault"
+                    spellCheck={false}
+                    disabled={!hasVaultSelection || vaultRenameStatus === "renaming"}
+                  />
+                  <button
+                    className="vault-rename-btn"
+                    type="button"
+                    onClick={() => { void handleVaultRename(); }}
+                    disabled={!hasVaultSelection || !vaultRenameName.trim() || vaultRenameStatus === "renaming"}
+                  >
+                    {vaultRenameStatus === "renaming" ? "Renomeando..." : "Renomear"}
+                  </button>
+                </div>
+                {!hasVaultSelection ? (
+                  <p className="vault-hint">Selecione um vault para habilitar a renomeacao.</p>
+                ) : vaultRenameStatus === "saved" ? (
+                  <p className="vault-success-hint">Nome do vault atualizado com sucesso.</p>
+                ) : vaultRenameStatus === "error" ? (
+                  <p className="vault-error-hint">{vaultRenameError}</p>
+                ) : (
+                  <p className="vault-hint">A alteracao atualiza o nome da pasta raiz do vault.</p>
+                )}
+              </div>
+            </>
+          )}
+
+          {(vaultStorageMode === "google-drive" || vaultStorageMode === "icloud") && (
+            <>
+              <p className="settings-description settings-description--tight">
+                {vaultStorageMode === "google-drive"
+                  ? "A pasta no Google Drive torna-se o vault ativo (menu lateral e Your Brain). Leitura no Drive; gravar conversas no Drive ainda nao esta disponivel."
+                  : "Defina a pasta no iCloud Drive. O suporte completo a iCloud na app esta em evolucao."}
+              </p>
+
+              <div className="cloud-directory-box">
+                <p className="cloud-directory-title">Diretorio em {cloudProviderLabel}</p>
+                <div className="cloud-directory-row">
+                  <input
+                    className="cloud-directory-input"
+                    type="text"
+                    value={cloudDirectory}
+                    onChange={(event) => {
+                      setCloudDirectory(event.target.value);
+                      if (cloudStatus !== "idle") {
+                        setCloudStatus("idle");
+                        setCloudError("");
+                      }
+                    }}
+                    placeholder={cloudDirectoryPlaceholder}
+                    spellCheck={false}
+                  />
+                  <button
+                    className="cloud-directory-pick-btn"
+                    type="button"
+                    onClick={handleCloudDirectoryChoose}
+                    disabled={googleDriveLoading && vaultStorageMode === "google-drive"}
+                  >
+                    {googleDriveLoading && vaultStorageMode === "google-drive" ? "Conectando..." : "Escolher diretorio"}
+                  </button>
+                  <button
+                    className="cloud-directory-save-btn"
+                    type="button"
+                    onClick={handleCloudDirectorySave}
+                    disabled={!cloudDirectory.trim()}
+                  >
+                    Salvar
+                  </button>
+                </div>
+
+                {vaultStorageMode === "google-drive" && cloudDirectoryLabel.trim() && (
+                  <p className="vault-hint">Pasta selecionada: {cloudDirectoryLabel}</p>
+                )}
+
+                {cloudStatus === "saved" ? (
+                  <p className="vault-success-hint">Configuracao do vault salva com sucesso.</p>
+                ) : cloudStatus === "error" ? (
+                  <p className="vault-error-hint">{cloudError}</p>
+                ) : (
+                  <p className="vault-hint">
+                    {vaultStorageMode === "google-drive"
+                      ? "Use Escolher diretorio para autenticar no Google Drive e selecionar uma pasta privada ou compartilhada."
+                      : "Para iCloud, informe o caminho ou identificador da pasta que deseja usar."}
+                  </p>
+                )}
+              </div>
+            </>
+          )}
         </section>
 
         {googleDrivePickerOpen && (
@@ -943,10 +969,15 @@ export default function SettingsView({
           gap: 8px;
         }
 
-        .cloud-provider-grid {
+        .vault-source-grid {
           display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 8px;
+        }
+
+        .settings-description--tight {
+          margin-top: 14px;
+          margin-bottom: 0;
         }
 
         .cloud-provider-btn {
@@ -1282,7 +1313,7 @@ export default function SettingsView({
         }
 
         @media (max-width: 560px) {
-          .cloud-provider-grid,
+          .vault-source-grid,
           .theme-mode-grid {
             grid-template-columns: 1fr;
           }

@@ -1,4 +1,7 @@
-export type CloudProvider = "google-drive" | "icloud";
+/** Origem do vault nas configuracoes: uma opcao ativa de cada vez. */
+export type VaultStorageMode = "google-drive" | "icloud" | "local";
+
+export type CloudProvider = Exclude<VaultStorageMode, "local">;
 
 export const CLOUD_PROVIDER_STORAGE_KEY = "brain2-cloud-provider";
 
@@ -13,8 +16,25 @@ export function getCloudDirectoryLabelStorageKey(provider: CloudProvider): strin
   return `${CLOUD_DIRECTORY_LABEL_STORAGE_KEY_PREFIX}${provider}`;
 }
 
+/** Valor salvo explicitamente ou migracao legada (pasta Drive sem modo). */
+export function getVaultStorageMode(): VaultStorageMode {
+  if (typeof window === "undefined") {
+    return "local";
+  }
+  const raw = window.localStorage.getItem(CLOUD_PROVIDER_STORAGE_KEY)?.trim();
+  if (raw === "icloud") return "icloud";
+  if (raw === "local") return "local";
+  if (raw === "google-drive") return "google-drive";
+  const folderId =
+    window.localStorage.getItem(getCloudDirectoryStorageKey("google-drive"))?.trim() ?? "";
+  if (folderId) return "google-drive";
+  return "local";
+}
+
+/** @deprecated Use getVaultStorageMode */
 export function normalizeCloudProvider(value: string | null | undefined): CloudProvider {
-  return value === "icloud" ? "icloud" : "google-drive";
+  const mode = value?.trim();
+  return mode === "icloud" ? "icloud" : "google-drive";
 }
 
 /** Pasta raiz do vault no Google Drive (localStorage), se configurada. */
@@ -25,8 +45,7 @@ export function loadGoogleDriveVaultFolderConfig(): {
   if (typeof window === "undefined") {
     return null;
   }
-  const provider = normalizeCloudProvider(window.localStorage.getItem(CLOUD_PROVIDER_STORAGE_KEY));
-  if (provider !== "google-drive") {
+  if (getVaultStorageMode() !== "google-drive") {
     return null;
   }
   const folderId =

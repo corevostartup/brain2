@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   getRedirectResult,
   onAuthStateChanged,
@@ -34,7 +34,10 @@ import {
   logFirestoreRegistrationError,
   registerOrUpdateUserInFirestore,
 } from "@/lib/firestoreUser";
-import { loadGoogleDriveVaultFolderConfig } from "@/lib/vaultCloudConfig";
+import {
+  CLOUD_PROVIDER_STORAGE_KEY,
+  loadGoogleDriveVaultFolderConfig,
+} from "@/lib/vaultCloudConfig";
 import { requestGoogleDriveAccessToken } from "@/lib/googleDrive";
 import { loadVaultFromGoogleDriveFolder } from "@/lib/googleDriveVault";
 
@@ -312,6 +315,8 @@ export default function Home() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [returnToYourBrainOnConversationClose, setReturnToYourBrainOnConversationClose] = useState(false);
   const [hasNativeVaultData, setHasNativeVaultData] = useState(false);
+  /** Atualizado em sync dentro de `applyVaultData` para evitar corrida com fetch do preset a sobrescrever o vault WKWebView. */
+  const hasNativeVaultDataRef = useRef(false);
   const [hasCloudVaultData, setHasCloudVaultData] = useState(false);
   const [vaultDataVersion, setVaultDataVersion] = useState(0);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -479,8 +484,17 @@ export default function Home() {
     const nextConversations = data.conversations ?? [];
     const nextGraph = normalizeGraph(data.graph, nextConversations);
 
-    setHasNativeVaultData(Boolean(options?.markAsNative));
+    const markNative = Boolean(options?.markAsNative);
+    setHasNativeVaultData(markNative);
+    hasNativeVaultDataRef.current = markNative;
     setHasCloudVaultData(Boolean(options?.markAsCloud));
+    if (typeof window !== "undefined") {
+      if (markNative) {
+        window.localStorage.setItem(CLOUD_PROVIDER_STORAGE_KEY, "local");
+      } else if (options?.markAsCloud) {
+        window.localStorage.setItem(CLOUD_PROVIDER_STORAGE_KEY, "google-drive");
+      }
+    }
     setVaultPath(data.path ?? "");
     setVaultFolders(nextFolders);
     setVaultGraph(nextGraph);
@@ -506,19 +520,40 @@ export default function Home() {
       return;
     }
 
+    const abortIfNativeWon = () => {
+      if (hasNativeVaultDataRef.current && !options?.force) {
+        setGraphLoading(false);
+        return true;
+      }
+      return false;
+    };
+
     setGraphLoading(true);
+    if (abortIfNativeWon()) {
+      return;
+    }
+
     try {
       const cloudConfig = loadGoogleDriveVaultFolderConfig();
       if (cloudConfig) {
         let cloudLoaded = false;
         for (const interactive of [false, true] as const) {
+          if (abortIfNativeWon()) {
+            return;
+          }
           try {
             const token = await requestGoogleDriveAccessToken(interactive);
+            if (abortIfNativeWon()) {
+              return;
+            }
             const data = await loadVaultFromGoogleDriveFolder(
               cloudConfig.folderId,
               token,
               cloudConfig.label
             );
+            if (abortIfNativeWon()) {
+              return;
+            }
             applyVaultData(
               {
                 path: data.path,
@@ -539,11 +574,21 @@ export default function Home() {
         }
       }
 
+      if (abortIfNativeWon()) {
+        return;
+      }
+
       const response = await fetch("/api/vault", { cache: "no-store" });
+      if (abortIfNativeWon()) {
+        return;
+      }
       if (!response.ok) {
         throw new Error("Falha ao carregar vault preset");
       }
       const data = (await response.json()) as PresetVaultResponse;
+      if (abortIfNativeWon()) {
+        return;
+      }
       applyVaultData(
         {
           path: data.path,
@@ -554,6 +599,9 @@ export default function Home() {
         { markAsNative: false, markAsCloud: false }
       );
     } catch {
+      if (abortIfNativeWon()) {
+        return;
+      }
       applyVaultData(
         {
           path: "",
@@ -565,14 +613,6 @@ export default function Home() {
       );
     }
   }, [hasNativeVaultData, applyVaultData]);
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      return;
-    }
-
-    void loadPresetVaultData();
-  }, [isAuthenticated, loadPresetVaultData]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -608,6 +648,14 @@ export default function Home() {
       window.removeEventListener("brain2-native-vault-selected", handleNativeVaultSelection);
     };
   }, [applyVaultData, isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    void loadPresetVaultData();
+  }, [isAuthenticated, loadPresetVaultData]);
 
   useEffect(() => {
     if (selectedConversationId && !selectedConversation) {
