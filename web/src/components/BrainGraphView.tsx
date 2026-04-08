@@ -276,13 +276,23 @@ export default function BrainGraphView({
   }, [activeEdges]);
 
   const graphData = useMemo((): GraphData<BrainNode, BrainLink> => {
-    const nodes: NodeObject<BrainNode>[] = activeNodes.map((n) => {
+    const baseRadius = Math.max(180, Math.min(dims.w, dims.h) * 0.34);
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // phyllotaxis
+    const nodes: NodeObject<BrainNode>[] = activeNodes.map((n, index) => {
       const deg = degreeMap[n.id] || 1;
+      const t = (index + 1) / Math.max(1, activeNodes.length);
+      const r = Math.sqrt(t) * baseRadius;
+      const a = index * goldenAngle;
       return {
         id: n.id,
         name: n.label,
         group: n.group,
         val: clamp(1 + Math.log1p(deg) * 1.4, 1, 12),
+        // Evita "nascer no centro" no WKWebView quando a simulação não aquece bem.
+        x: r * Math.cos(a),
+        y: r * Math.sin(a),
+        vx: 0,
+        vy: 0,
       };
     });
 
@@ -309,7 +319,7 @@ export default function BrainGraphView({
     });
 
     return { nodes, links };
-  }, [activeNodes, activeEdges, degreeMap, groupMap]);
+  }, [activeNodes, activeEdges, degreeMap, groupMap, dims.h, dims.w]);
 
   const graphKey = useMemo(
     () => `${useVault ? "v" : "m"}-${graphData.nodes.length}-${graphData.links.length}`,
