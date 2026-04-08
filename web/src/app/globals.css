@@ -113,3 +113,27 @@ button:focus {
 ::-webkit-scrollbar-thumb {
   display: none !important;
 }
+
+/*
+ * App macOS (WKWebView): 100dvh costuma ser maior que a area do WebView; o layout quebra
+ * (sidebar, grafo Your Brain, botao lateral). Forcamos cadeia em % em relacao ao WKWebView.
+ */
+html[data-brain2-native],
+html[data-brain2-native] body {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+}
+
+html[data-brain2-native] body {
+  display: flex;
+  flex-direction: column;
+}
+
+html[data-brain2-native] main,
+html[data-brain2-native] [role="main"] {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  flex: 1 1 auto !important;
+}

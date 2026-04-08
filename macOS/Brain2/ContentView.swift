@@ -94,6 +94,8 @@ struct WebView: NSViewRepresentable {
         private var googleOAuthCompletedViaLoopback = false
         private let googleOAuthOutcomeLock = NSLock()
         private var googleOAuthOutcomeDelivered = false
+        /// Evita varios ASWebAuthenticationSession / listeners em paralelo (mensagem "helper application" no macOS).
+        private var isGoogleOAuthFlowActive = false
         private var oauthPresentationWindow: NSWindow?
         private let fileManager = FileManager.default
         private lazy var wikilinkRegex = try? NSRegularExpression(
@@ -159,28 +161,55 @@ struct WebView: NSViewRepresentable {
                 ?? NSApplication.shared.windows.first!
         }
 
+        private func endGoogleOAuthFlowTracking() {
+            isGoogleOAuthFlowActive = false
+        }
+
         private func startGoogleSignInWithSystemBrowser() {
-            let clientId = NativeOAuthSecrets.googleOAuthDesktopClientID
+            guard !isGoogleOAuthFlowActive else {
+                #if DEBUG
+                NSLog("[Brain2 OAuth] Fluxo de login ja em curso; ignorando clique extra.")
+                #endif
+                return
+            }
+
+            let clientId = NativeOAuthSecrets.googleOAuthClientID
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clientId.isEmpty else {
                 publishGoogleSignInError(
-                    "Configure googleOAuthDesktopClientID em NativeOAuthSecrets.swift. No Google Cloud crie um ID OAuth tipo Computador e autorize o redirect http://127.0.0.1:8765/"
+                    "Configure googleOAuthClientID em NativeOAuthSecrets.Local.swift: use o ID cliente Web do Firebase (Autenticacao > Google) e autorize http://127.0.0.1:8765/ nesse cliente na Google Cloud."
                 )
                 return
             }
 
+            let clientSecretTrimmed = NativeOAuthSecrets.googleOAuthClientSecret
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clientSecretTrimmed.isEmpty else {
+                publishGoogleSignInError(
+                    "Falta googleOAuthClientSecret: edite o ficheiro NativeOAuthSecrets.Local.swift na pasta Brain2 (nao o .example). Google Cloud > Credenciais > Web client (auto created by Google Service) > + segredo > copie o GOCSPX-... completo ao aparecer e cole entre aspas."
+                )
+                return
+            }
+
+            // Key/main primeiro: o helper do ASWebAuthenticationSession liga-se melhor a janela do app ativa do que so ao WKWebView.
             guard
-                let anchor = webView?.window
-                    ?? NSApp.keyWindow
+                let anchor = NSApp.keyWindow
                     ?? NSApp.mainWindow
+                    ?? webView?.window
                     ?? NSApplication.shared.windows.first(where: { $0.isVisible })
             else {
                 publishGoogleSignInError("Nenhuma janela disponivel para apresentar o login do Google.")
                 return
             }
 
+            isGoogleOAuthFlowActive = true
+
+            let redirectURI = NativeOAuthSecrets.googleOAuthRedirectURI
+            let oauthPort = GoogleDesktopOAuth.loopbackPort(forRedirectURI: redirectURI)
+
             let verifier = GoogleDesktopOAuth.randomPKCEVerifier()
             guard let challenge = GoogleDesktopOAuth.pkceChallengeS256(verifier: verifier) else {
+                endGoogleOAuthFlowTracking()
                 publishGoogleSignInError("Falha ao preparar o login (PKCE).")
                 return
             }
@@ -189,21 +218,41 @@ struct WebView: NSViewRepresentable {
             guard let authURL = GoogleDesktopOAuth.buildAuthorizationURL(
                 clientId: clientId,
                 challenge: challenge,
-                state: state
+                state: state,
+                redirectURI: redirectURI
             ) else {
+                endGoogleOAuthFlowTracking()
                 publishGoogleSignInError("URL de autorizacao invalida.")
                 return
             }
 
+            #if DEBUG
+            if
+                let items = URLComponents(url: authURL, resolvingAgainstBaseURL: false)?.queryItems,
+                let ru = items.first(where: { $0.name == "redirect_uri" })?.value
+            {
+                NSLog(
+                    "[Brain2 OAuth] Se aparecer redirect_uri_mismatch, cadastre EXATAMENTE isto (mesmo cliente OAuth do client_id): %@",
+                    ru
+                )
+            }
+            NSLog("[Brain2 OAuth] client_id (inteiro, comparar com Credenciais Google): %@", clientId)
+            #endif
+
             googleOAuthCompletedViaLoopback = false
             googleOAuthOutcomeDelivered = false
             googleLoopbackReceiver?.stop()
-            let receiver = OAuthLoopbackRedirectReceiver(port: GoogleDesktopOAuth.redirectPort) { [weak self] callbackURL in
+            let receiver = OAuthLoopbackRedirectReceiver(port: oauthPort) { [weak self] callbackURL in
                 guard let self else { return }
                 self.googleLoopbackReceiver = nil
                 self.googleOAuthCompletedViaLoopback = true
                 self.googleAuthSession?.cancel()
-                self.handleGoogleOAuthRedirectURL(callbackURL, clientId: clientId, codeVerifier: verifier)
+                self.handleGoogleOAuthRedirectURL(
+                    callbackURL,
+                    clientId: clientId,
+                    codeVerifier: verifier,
+                    redirectURI: redirectURI
+                )
             }
             googleLoopbackReceiver = receiver
 
@@ -211,12 +260,19 @@ struct WebView: NSViewRepresentable {
                 guard let self else { return }
                 if let error {
                     self.googleLoopbackReceiver = nil
+                    self.endGoogleOAuthFlowTracking()
                     self.publishGoogleSignInError(
-                        "Nao foi possivel abrir a porta \(GoogleDesktopOAuth.redirectPort) para o login Google (\(error.localizedDescription)). Verifique se outra app usa essa porta."
+                        "Nao foi possivel abrir a porta \(oauthPort) para o login Google (\(error.localizedDescription)). Verifique se outra app usa essa porta."
                     )
                     return
                 }
-                self.presentGoogleOAuthSession(authURL: authURL, anchor: anchor, clientId: clientId, codeVerifier: verifier)
+                self.presentGoogleOAuthSession(
+                    authURL: authURL,
+                    anchor: anchor,
+                    clientId: clientId,
+                    codeVerifier: verifier,
+                    redirectURI: redirectURI
+                )
             }
         }
 
@@ -224,7 +280,8 @@ struct WebView: NSViewRepresentable {
             authURL: URL,
             anchor: NSWindow,
             clientId: String,
-            codeVerifier: String
+            codeVerifier: String,
+            redirectURI: String
         ) {
             oauthPresentationWindow = anchor
 
@@ -233,6 +290,7 @@ struct WebView: NSViewRepresentable {
                 callbackURLScheme: "http"
             ) { [weak self] callbackURL, error in
                 guard let self else { return }
+                self.endGoogleOAuthFlowTracking()
                 self.googleAuthSession = nil
                 self.oauthPresentationWindow = nil
                 self.googleLoopbackReceiver?.stop()
@@ -251,7 +309,12 @@ struct WebView: NSViewRepresentable {
                     self.publishGoogleSignInError("Resposta inesperada do Google.")
                     return
                 }
-                self.handleGoogleOAuthRedirectURL(callbackURL, clientId: clientId, codeVerifier: codeVerifier)
+                self.handleGoogleOAuthRedirectURL(
+                    callbackURL,
+                    clientId: clientId,
+                    codeVerifier: codeVerifier,
+                    redirectURI: redirectURI
+                )
             }
 
             session.presentationContextProvider = self
@@ -259,6 +322,7 @@ struct WebView: NSViewRepresentable {
             googleAuthSession = session
 
             if !session.start() {
+                endGoogleOAuthFlowTracking()
                 googleAuthSession = nil
                 oauthPresentationWindow = nil
                 googleLoopbackReceiver?.stop()
@@ -267,7 +331,12 @@ struct WebView: NSViewRepresentable {
             }
         }
 
-        private func handleGoogleOAuthRedirectURL(_ callbackURL: URL, clientId: String, codeVerifier: String) {
+        private func handleGoogleOAuthRedirectURL(
+            _ callbackURL: URL,
+            clientId: String,
+            codeVerifier: String,
+            redirectURI: String
+        ) {
             guard let items = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems else {
                 publishGoogleSignInError("Resposta inesperada do Google.")
                 return
@@ -296,7 +365,8 @@ struct WebView: NSViewRepresentable {
                 code: code,
                 clientId: clientId,
                 codeVerifier: codeVerifier,
-                clientSecret: NativeOAuthSecrets.googleOAuthDesktopClientSecret
+                redirectURI: redirectURI,
+                clientSecret: NativeOAuthSecrets.googleOAuthClientSecret
             ) { [weak self] result in
                 guard let self else { return }
                 switch result {
@@ -386,6 +456,7 @@ struct WebView: NSViewRepresentable {
             }
 
             let script = """
+            document.documentElement.setAttribute('data-brain2-native', '');
             window.Brain2Native = window.Brain2Native || {};
             window.Brain2Native.isAvailable = true;
                         window.Brain2Native.llmConfig = \(llmConfigJSON);

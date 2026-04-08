@@ -1077,6 +1077,17 @@ export default function DesktopSidebar({
           }
         }
 
+        /* WKWebView (app Mac): altura em % em vez de dvh */
+        :global(html[data-brain2-native]) .desktop-sidebar {
+          display: block !important;
+          width: var(--desktop-sidebar-width);
+          height: 100% !important;
+          max-height: 100% !important;
+          min-height: 0 !important;
+          padding: 12px 0 12px 12px;
+          box-sizing: border-box;
+        }
+
         @media (max-width: 979px) {
           .desktop-sidebar--mobile {
             display: block;
@@ -1102,6 +1113,7 @@ export default function DesktopSidebar({
           flex-direction: column;
           gap: 14px;
           height: 100%;
+          min-height: 0;
           background: var(--bar-bg);
           border: 1px solid var(--bar-border);
           border-radius: 18px;
@@ -1112,6 +1124,7 @@ export default function DesktopSidebar({
           display: flex;
           align-items: center;
           justify-content: space-between;
+          flex-shrink: 0;
         }
 
         .brand-actions {
@@ -1152,6 +1165,7 @@ export default function DesktopSidebar({
           display: flex;
           flex-direction: column;
           gap: 8px;
+          flex-shrink: 0;
         }
 
         .search-row {
@@ -1192,7 +1206,11 @@ export default function DesktopSidebar({
         }
 
         .your-brain-btn {
+          flex-shrink: 0;
+          width: 100%;
+          box-sizing: border-box;
           height: 30px;
+          min-height: 30px;
           border: 1px solid var(--bar-border);
           border-radius: 9px;
           background: rgba(255, 255, 255, 0.02);

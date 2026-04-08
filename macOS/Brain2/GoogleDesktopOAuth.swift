@@ -11,9 +11,15 @@ import Network
 import Security
 
 enum GoogleDesktopOAuth {
-    /// Google exige que a app esteja a escuta neste endereço quando usa redirect loopback.
+    /// Porta do servidor local quando se usa o redirect por defeito.
     static let redirectPort: UInt16 = 8765
-    static var redirectURI: String { "http://127.0.0.1:\(redirectPort)/" }
+    static var defaultRedirectURI: String { "http://127.0.0.1:\(redirectPort)/" }
+
+    /// Porta TCP a escutar (tem de coincidir com a do `redirectURI` usado no OAuth).
+    static func loopbackPort(forRedirectURI redirectURI: String) -> UInt16 {
+        guard let url = URL(string: redirectURI), let p = url.port else { return redirectPort }
+        return UInt16(clamping: p)
+    }
 
     struct Tokens {
         let idToken: String
@@ -34,7 +40,12 @@ enum GoogleDesktopOAuth {
         }
     }
 
-    static func buildAuthorizationURL(clientId: String, challenge: String, state: String) -> URL? {
+    static func buildAuthorizationURL(
+        clientId: String,
+        challenge: String,
+        state: String,
+        redirectURI: String
+    ) -> URL? {
         var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
         components.queryItems = [
             URLQueryItem(name: "client_id", value: clientId),
@@ -54,7 +65,7 @@ enum GoogleDesktopOAuth {
     private static func friendlyGoogleTokenError(error: String, description: String) -> String {
         let blob = "\(error) \(description)".lowercased()
         if blob.contains("client_secret") {
-            return "O Google exige client_secret neste pedido. Confirme que o client ID e do tipo Computador (Desktop) e preencha googleOAuthDesktopClientSecret em NativeOAuthSecrets.swift com a chave secreta desse mesmo cliente (Credenciais > cliente OAuth > segredo, ou JSON transferido)."
+            return "O Google exige client_secret: preencha googleOAuthClientSecret em NativeOAuthSecrets.Local.swift com a chave do mesmo cliente OAuth **Web** que usou no client ID (Credenciais > Google Cloud)."
         }
         return description
     }
@@ -84,6 +95,7 @@ enum GoogleDesktopOAuth {
         code: String,
         clientId: String,
         codeVerifier: String,
+        redirectURI: String,
         clientSecret: String = "",
         completion: @escaping (Result<Tokens, Error>) -> Void
     ) {

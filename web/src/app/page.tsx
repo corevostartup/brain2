@@ -321,6 +321,16 @@ export default function Home() {
   const [chatSessionStartedAt, setChatSessionStartedAt] = useState<number | null>(null);
   const [chatSessionFolderPath, setChatSessionFolderPath] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isNativeMacShell, setIsNativeMacShell] = useState(() =>
+    typeof window !== "undefined" && isBrain2NativeAppShell(),
+  );
+
+  useEffect(() => {
+    const syncNativeShell = () => setIsNativeMacShell(isBrain2NativeAppShell());
+    syncNativeShell();
+    window.addEventListener("brain2-native-bridge-ready", syncNativeShell);
+    return () => window.removeEventListener("brain2-native-bridge-ready", syncNativeShell);
+  }, []);
 
   useEffect(() => {
     document.body.style.opacity = "1";
@@ -1130,10 +1140,12 @@ export default function Home() {
     return <LoginView onLogin={handleLogin} authLoading={isAuthInitializing} authError={authError} />;
   }
 
+  const shellHeight = isNativeMacShell ? "100%" : "100dvh";
+
   return (
     <main
       style={{
-        height: "100dvh",
+        height: shellHeight,
         width: "100vw",
         display: "flex",
         flexDirection: "row",
@@ -1246,7 +1258,7 @@ export default function Home() {
           alignItems: activeView !== "home" ? "stretch" : "center",
           justifyContent: activeView !== "home" ? "stretch" : "center",
           gap: activeView !== "home" ? 0 : "10px",
-          height: "100dvh",
+          height: shellHeight,
           minHeight: 0,
           userSelect: activeView !== "home" ? "auto" : "none",
           pointerEvents: activeView !== "home" ? "all" : "none",
