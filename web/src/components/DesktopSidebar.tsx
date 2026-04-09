@@ -27,9 +27,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { formatConversationDisplayTitle, type FolderTreeNode, type VaultConversation } from "@/lib/vault";
-import { loadCentralBrainNameFromStorage } from "@/lib/brain2CentralFolder";
+import {
+  loadCentralBrainNameFromStorage,
+  VAULT_LOOSE_MEMORIES_FOLDER_NAME,
+} from "@/lib/brain2CentralFolder";
+import { isMemoriesHubNotePath } from "@/lib/vaultMarkdown";
 
-const DEFAULT_HIDDEN_ROOT_FOLDERS = new Set(["Brain2Memories"]);
+const DEFAULT_HIDDEN_ROOT_FOLDERS = new Set([VAULT_LOOSE_MEMORIES_FOLDER_NAME]);
 
 function isHiddenRootFolderName(name: string, hidden: Set<string>): boolean {
   for (const h of hidden) {
@@ -188,7 +192,7 @@ export default function DesktopSidebar({
 
   const showUserPhoto = hasUserPhoto && !userPhotoLoadFailed;
   const hiddenRootFolderNames = useMemo(() => {
-    const s = new Set<string>(["Brain2Memories"]);
+    const s = new Set<string>([VAULT_LOOSE_MEMORIES_FOLDER_NAME]);
     const c = loadCentralBrainNameFromStorage();
     if (c?.trim()) {
       s.add(c.trim());
@@ -638,7 +642,9 @@ export default function DesktopSidebar({
       : vaultConversations;
 
     const visibleConversations = scoped.filter(
-      (conversation) => !isFolderCorrelationConversationPath(conversation.path)
+      (conversation) =>
+        !isFolderCorrelationConversationPath(conversation.path) &&
+        !isMemoriesHubNotePath(conversation.path),
     );
 
     return [...visibleConversations].sort((a, b) => b.modifiedAt - a.modifiedAt);

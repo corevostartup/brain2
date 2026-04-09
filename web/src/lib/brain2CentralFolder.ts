@@ -9,8 +9,19 @@
  * (uma linha = nome da pasta-central). O wikilink ao hub só é escrito em `Nome/Nome.md` ao criar
  * pastas na raiz do vault (irmãs da pasta-central), não em subpastas.
  *
- * `Brain2Memories/Memories.md` é criado quando a pasta existe e recebe o mesmo wikilink ao hub.
+ * Pasta `Memories` (raiz do vault):
+ * - Criada automaticamente pelo Brain2; conversas sem pasta ficam em `Memories/`.
+ * - Oculta no menu lateral (como a pasta-central).
+ * - Dentro existe `Memories/Memories.md` com metadados a apontar para `Nome-da-pasta-central.md` (hub).
+ * - Cada conversa nova em `Memories/` é um ficheiro `.md` à parte; a correlação pasta↔`Pasta.md`
+ *   aplica-se também a `Memories` e `Memories.md` (como nas outras pastas).
  */
+
+/** Pasta na raiz do vault para conversas sem pasta selecionada. */
+export const VAULT_LOOSE_MEMORIES_FOLDER_NAME = "Memories";
+
+/** Ficheiro `Memories/Memories.md` (nome igual ao da pasta). */
+export const VAULT_MEMORIES_FOLDER_NOTE_BASENAME = `${VAULT_LOOSE_MEMORIES_FOLDER_NAME}.md`;
 
 export const BRAIN2_CENTRAL_BRAIN_NAME_KEY = "brain2-central-brain-folder-name";
 
@@ -61,7 +72,7 @@ export function isCentralBrainHubMarkdownPath(
   return norm.localeCompare(expected, undefined, { sensitivity: "base" }) === 0;
 }
 
-/** Pasta na raiz do vault com o nome da pasta-central — oculta no menu lateral (como `Brain2Memories`). */
+/** Pasta na raiz do vault com o nome da pasta-central — oculta no menu lateral (como `Memories`). */
 export function shouldHideRootVaultFolderName(
   folderName: string,
   centralName: string | null | undefined,

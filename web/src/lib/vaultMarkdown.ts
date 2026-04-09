@@ -1,4 +1,8 @@
 import type { VaultConversation, VaultGraph } from "@/lib/vault";
+import {
+  VAULT_LOOSE_MEMORIES_FOLDER_NAME,
+  VAULT_MEMORIES_FOLDER_NOTE_BASENAME,
+} from "@/lib/brain2CentralFolder";
 
 export type VaultMarkdownFile = {
   name: string;
@@ -8,6 +12,13 @@ export type VaultMarkdownFile = {
 };
 
 const WIKILINK_REGEX = /\[\[([^\]|#]+?)(?:#[^\]|]*)?(?:\|[^\]]*?)?\]\]/g;
+
+/** Nota de sistema `Memories/Memories.md`; não entra na lista de conversas da barra lateral. */
+export function isMemoriesHubNotePath(relativePath: string): boolean {
+  const n = relativePath.replace(/\\/g, "/").trim();
+  const expected = `${VAULT_LOOSE_MEMORIES_FOLDER_NAME}/${VAULT_MEMORIES_FOLDER_NOTE_BASENAME}`;
+  return n.localeCompare(expected, undefined, { sensitivity: "base" }) === 0;
+}
 
 function parseWikilinks(content: string): string[] {
   const links: string[] = [];
@@ -25,6 +36,7 @@ function parseWikilinks(content: string): string[] {
 
 export function buildConversationsFromMarkdownFiles(files: VaultMarkdownFile[]): VaultConversation[] {
   return files
+    .filter((file) => !isMemoriesHubNotePath(file.path))
     .map((file) => ({
       id: file.path.toLowerCase(),
       title: file.name,

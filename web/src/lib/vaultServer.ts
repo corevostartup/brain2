@@ -2,6 +2,10 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { FolderTreeNode, VaultConversation, VaultGraph } from "@/lib/vault";
 import {
+  VAULT_LOOSE_MEMORIES_FOLDER_NAME,
+  VAULT_MEMORIES_FOLDER_NOTE_BASENAME,
+} from "@/lib/brain2CentralFolder";
+import {
   buildConversationsFromMarkdownFiles,
   buildGraphFromMarkdownFiles,
   type VaultMarkdownFile,
@@ -186,12 +190,9 @@ async function readPresetCentralBrainFolderName(): Promise<string | null> {
   }
 }
 
-const BRAIN2_MEMORIES_FOLDER = "Brain2Memories";
-const BRAIN2_MEMORIES_NOTE = "Memories.md";
-
-/** Garante `Brain2Memories/Memories.md` com wikilink à pasta-central (ficheiro `.brain2-central-folder-name`). */
-async function ensureBrain2MemoriesMemoriesMarkdownIfNeeded(): Promise<void> {
-  const memoriesDir = path.join(PRESET_VAULT_PATH, BRAIN2_MEMORIES_FOLDER);
+/** Garante `Memories/Memories.md` com wikilink à pasta-central (ficheiro `.brain2-central-folder-name`). */
+async function ensureMemoriesFolderHubMarkdownIfNeeded(): Promise<void> {
+  const memoriesDir = path.join(PRESET_VAULT_PATH, VAULT_LOOSE_MEMORIES_FOLDER_NAME);
   try {
     const st = await fs.stat(memoriesDir);
     if (!st.isDirectory()) {
@@ -200,7 +201,7 @@ async function ensureBrain2MemoriesMemoriesMarkdownIfNeeded(): Promise<void> {
   } catch {
     return;
   }
-  const memoriesMd = path.join(memoriesDir, BRAIN2_MEMORIES_NOTE);
+  const memoriesMd = path.join(memoriesDir, VAULT_MEMORIES_FOLDER_NOTE_BASENAME);
   try {
     await fs.access(memoriesMd);
   } catch {
@@ -356,16 +357,17 @@ export async function savePresetConversation(
   const formattedTitle = formatConversationFileTitle(title || "conversation");
 
   const normalizedFolderPath = normalizeRelativePath(folderPath ?? "");
-  const targetFolderRelativePath = normalizedFolderPath || "Brain2Memories";
+  const targetFolderRelativePath = normalizedFolderPath || VAULT_LOOSE_MEMORIES_FOLDER_NAME;
   const targetFolderAbsolutePath = resolvePresetPath(targetFolderRelativePath);
   await fs.mkdir(targetFolderAbsolutePath, { recursive: true });
-  await ensureBrain2MemoriesMemoriesMarkdownIfNeeded();
+  await ensureMemoriesFolderHubMarkdownIfNeeded();
 
   let markdownToPersist = markdown;
-  if (normalizedFolderPath) {
-    const folderName = path.basename(normalizedFolderPath);
+  const pathForCorrelation = normalizedFolderPath || VAULT_LOOSE_MEMORIES_FOLDER_NAME;
+  if (pathForCorrelation) {
+    const folderName = path.basename(pathForCorrelation);
     if (folderName) {
-      const folderCorrelationRelativePath = `${normalizedFolderPath}/${folderName}.md`;
+      const folderCorrelationRelativePath = `${pathForCorrelation}/${folderName}.md`;
       const folderCorrelationAbsolutePath = resolvePresetPath(folderCorrelationRelativePath);
 
       try {

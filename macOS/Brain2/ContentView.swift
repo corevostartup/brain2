@@ -259,8 +259,8 @@ struct WebView: NSViewRepresentable {
         private static let selectedVaultBookmarkDefaultsKey = "brain2-selected-vault-bookmark"
         /// Nome da pasta-central (mesmo nome que `Nome.md` dentro dela), alinhado com a web.
         private static let centralBrainFolderNameDefaultsKey = "brain2-central-brain-folder-name"
-        private static let memoriesFolderName = "Brain2Memories"
-        /// Ficheiro de nota dentro de `Brain2Memories` (vincula à pasta-central nos metadados).
+        private static let memoriesFolderName = "Memories"
+        /// Ficheiro `Memories/Memories.md` (vincula à pasta-central nos metadados).
         private static let memoriesNoteFileName = "Memories.md"
         private static let llmModelDefaultsKey = "brain2-llm-model"
         private static let llmApiKeyDefaultsKey = "brain2-llm-api-key"
@@ -948,8 +948,8 @@ struct WebView: NSViewRepresentable {
             webView?.evaluateJavaScript(script, completionHandler: nil)
         }
 
-        /// Se a pasta `Brain2Memories` existir, garante `Memories.md` com `- Correlation: [[PastaCentral]]`.
-        private func ensureBrain2MemoriesMemoriesMarkdownIfNeeded(vaultRootURL: URL) throws {
+        /// Se a pasta `Memories` existir, garante `Memories.md` com `- Correlation: [[PastaCentral]]`.
+        private func ensureMemoriesFolderHubMarkdownIfNeeded(vaultRootURL: URL) throws {
             let memoriesDir = vaultRootURL.appendingPathComponent(Self.memoriesFolderName, isDirectory: true)
             var isMemoriesDir: ObjCBool = false
             guard fileManager.fileExists(atPath: memoriesDir.path, isDirectory: &isMemoriesDir), isMemoriesDir.boolValue else {
@@ -1031,10 +1031,10 @@ struct WebView: NSViewRepresentable {
                         )
 
                         do {
-                            try self.ensureBrain2MemoriesMemoriesMarkdownIfNeeded(vaultRootURL: vaultURL)
+                            try self.ensureMemoriesFolderHubMarkdownIfNeeded(vaultRootURL: vaultURL)
                         } catch {
                             #if DEBUG
-                            NSLog("[Brain2 Native] Brain2Memories/Memories.md: \(error.localizedDescription)")
+                            NSLog("[Brain2 Native] Memories/Memories.md: \(error.localizedDescription)")
                             #endif
                         }
 
@@ -1057,10 +1057,18 @@ struct WebView: NSViewRepresentable {
                             }
                             try self.fileManager.moveItem(at: existingConversationURL, to: fileURL)
                         }
+                        let pathForCorrelation: String? = {
+                            if let p = normalizedFolderPath, !p.isEmpty { return p }
+                            if targetFolderURL.lastPathComponent.caseInsensitiveCompare(Self.memoriesFolderName) == .orderedSame {
+                                return Self.memoriesFolderName
+                            }
+                            return nil
+                        }()
+
                         let markdownToPersist = self.applyFolderCorrelationIfNeeded(
                             markdown: markdown,
                             targetFolderURL: targetFolderURL,
-                            normalizedFolderPath: normalizedFolderPath
+                            normalizedFolderPath: pathForCorrelation
                         )
 
                         try markdownToPersist.write(to: fileURL, atomically: true, encoding: .utf8)
@@ -1934,6 +1942,8 @@ struct WebView: NSViewRepresentable {
                 let hubPath = "\(c)/\(c).md"
                 markdownFiles.removeAll { $0.path.caseInsensitiveCompare(hubPath) == .orderedSame }
             }
+            let memoriesHubNotePath = "\(Self.memoriesFolderName)/\(Self.memoriesNoteFileName)"
+            markdownFiles.removeAll { $0.path.caseInsensitiveCompare(memoriesHubNotePath) == .orderedSame }
             let graph = buildGraph(from: markdownFiles)
             let conversations = buildConversations(from: markdownFiles)
 
@@ -2001,6 +2011,11 @@ struct WebView: NSViewRepresentable {
                 if isVaultRoot,
                    let h = hiddenCentral, !h.isEmpty,
                    entry.lastPathComponent.caseInsensitiveCompare(h) == .orderedSame {
+                    continue
+                }
+
+                if isVaultRoot,
+                   entry.lastPathComponent.caseInsensitiveCompare(Self.memoriesFolderName) == .orderedSame {
                     continue
                 }
 

@@ -49,7 +49,10 @@ import {
   coerceNativeVaultGraph,
   fingerprintNativeVaultState,
 } from "@/lib/nativeVaultPayload";
-import { saveCentralBrainNameToStorage } from "@/lib/brain2CentralFolder";
+import {
+  saveCentralBrainNameToStorage,
+  VAULT_LOOSE_MEMORIES_FOLDER_NAME,
+} from "@/lib/brain2CentralFolder";
 import { emitNativeDebug, isNativeShellBridgeAvailable } from "@/lib/nativeDebug";
 import { requestGoogleDriveAccessToken } from "@/lib/googleDrive";
 import { loadVaultFromGoogleDriveFolder } from "@/lib/googleDriveVault";
@@ -1313,7 +1316,7 @@ export default function Home() {
     const safeConversationID = sanitizeFileName(conversationRecordId);
     const formattedTitle = formatConversationFileTitle(title);
     const normalizedFolderPath = normalizeFolderPath(params.folderPath);
-    const targetFolderPath = normalizedFolderPath ?? "Brain2Memories";
+    const targetFolderPath = normalizedFolderPath ?? VAULT_LOOSE_MEMORIES_FOLDER_NAME;
     const memoryPath = `${targetFolderPath}/${formattedTitle} - (${safeConversationID}).md`;
     const optimisticConversation: VaultConversation = {
       id: memoryPath.toLowerCase(),
