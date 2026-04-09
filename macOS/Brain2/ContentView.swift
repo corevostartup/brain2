@@ -1938,12 +1938,13 @@ struct WebView: NSViewRepresentable {
             let centralName = UserDefaults.standard
                 .string(forKey: Self.centralBrainFolderNameDefaultsKey)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Remove só o hub `Nome/Nome.md` do conjunto usado no grafo (evita duplicar o eixo).
+            // `Memories/Memories.md` mantém-se incluído: o Your Brain precisa das wikilinks (ex.: correlação à pasta-central).
+            // A lista de conversas na web continua a ocultar esta nota (DesktopSidebar / filtros).
             if let c = centralName, !c.isEmpty {
                 let hubPath = "\(c)/\(c).md"
                 markdownFiles.removeAll { $0.path.caseInsensitiveCompare(hubPath) == .orderedSame }
             }
-            let memoriesHubNotePath = "\(Self.memoriesFolderName)/\(Self.memoriesNoteFileName)"
-            markdownFiles.removeAll { $0.path.caseInsensitiveCompare(memoriesHubNotePath) == .orderedSame }
             let graph = buildGraph(from: markdownFiles)
             let conversations = buildConversations(from: markdownFiles)
 
