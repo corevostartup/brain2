@@ -14,11 +14,19 @@ import WebKit
 /// Mesma base da landing Brain2 (cinza quase preto).
 private let appChromeBackground = Color(red: 12 / 255, green: 12 / 255, blue: 12 / 255)
 
+enum DirectoryOnboardingStep: Equatable {
+    /// Escolha Local / Cloud / Drive
+    case chooseDirectory
+    /// Após escolher pasta local — nome ainda só UI
+    case activateBrain
+}
+
 @MainActor
 final class DirectoryOnboardingModel: ObservableObject {
     static let userDefaultsKey = "brain2-directory-onboarding-completed"
 
     @Published var isPresented = false
+    @Published var step: DirectoryOnboardingStep = .chooseDirectory
 
     /// Chamado pelo WebView Coordinator após login Google bem-sucedido.
     var pickLocalHandler: (() -> Void)?
@@ -29,12 +37,22 @@ final class DirectoryOnboardingModel: ObservableObject {
 
     func requestPresentationAfterFirstSuccessfulLogin() {
         guard !hasCompletedOnboarding else { return }
+        step = .chooseDirectory
         isPresented = true
+    }
+
+    func advanceToActivateBrainAfterVaultChosen() {
+        step = .activateBrain
+    }
+
+    func goBackToChooseDirectory() {
+        step = .chooseDirectory
     }
 
     func markCompletedAndDismiss() {
         UserDefaults.standard.set(true, forKey: Self.userDefaultsKey)
         isPresented = false
+        step = .chooseDirectory
     }
 
     func pickLocal() {
@@ -174,6 +192,48 @@ struct WebView: NSViewRepresentable {
             injectNativeBridge()
             publishPersistedVaultIfAvailable()
             promptRepickIfLegacyPathWithoutBookmark()
+            scheduleMacOSOnboardingSessionProbe()
+        }
+
+        /// Fallback no macOS: se `webAppSignedIn` não disparar (Firebase modular, etc.), tenta detetar sessão via localStorage.
+        private func scheduleMacOSOnboardingSessionProbe() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.runMacOSOnboardingLocalStorageProbe()
+            }
+        }
+
+        private func runMacOSOnboardingLocalStorageProbe() {
+            guard let webView else { return }
+            guard let onboarding = directoryOnboarding else { return }
+            guard !onboarding.hasCompletedOnboarding else { return }
+            guard resolvePersistedVaultURL() == nil else {
+                UserDefaults.standard.set(true, forKey: DirectoryOnboardingModel.userDefaultsKey)
+                return
+            }
+
+            let script = """
+            (function () {
+              try {
+                for (var i = 0; i < localStorage.length; i++) {
+                  var k = localStorage.key(i);
+                  if (k && k.toLowerCase().indexOf('firebase') !== -1) return true;
+                }
+              } catch (e) {}
+              return false;
+            })();
+            """
+            webView.evaluateJavaScript(script) { [weak self] result, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    let looksSignedIn: Bool = {
+                        if let b = result as? Bool { return b }
+                        if let n = result as? NSNumber { return n.boolValue }
+                        return false
+                    }()
+                    guard looksSignedIn else { return }
+                    self.maybePresentDirectoryOnboardingAfterSignIn()
+                }
+            }
         }
 
         /// Instalações antigas só tinham o caminho em texto; no sandbox isso não dá acesso de escrita.
@@ -976,10 +1036,10 @@ struct WebView: NSViewRepresentable {
             return "\(correlationLine)\n\(markdown)"
         }
 
-        /// Fluxo de escolha de pasta após o onboarding (fecha o overlay quando o vault fica persistido).
+        /// Fluxo de escolha de pasta no onboarding: após gravar o vault, mostra o passo «Ative seu cérebro».
         func presentDirectoryPickerFromOnboarding() {
             presentDirectoryPicker(onVaultPersisted: { [weak self] in
-                self?.directoryOnboarding?.markCompletedAndDismiss()
+                self?.directoryOnboarding?.advanceToActivateBrainAfterVaultChosen()
             })
         }
 

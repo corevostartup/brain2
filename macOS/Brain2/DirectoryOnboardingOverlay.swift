@@ -8,72 +8,138 @@ import SwiftUI
 
 struct DirectoryOnboardingOverlay: View {
     @ObservedObject var model: DirectoryOnboardingModel
+    /// Campo apenas visual — persistência virá depois.
+    @State private var brainDisplayName: String = ""
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.55)
                 .ignoresSafeArea()
 
-            VStack(spacing: 24) {
-                VStack(spacing: 8) {
-                    Text("Escolha o Diretório")
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text("Onde pretende guardar o seu vault? Pode alterar isto mais tarde nas definições.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 420)
+            Group {
+                switch model.step {
+                case .chooseDirectory:
+                    chooseDirectoryCard
+                case .activateBrain:
+                    activateBrainCard
                 }
-
-                VStack(spacing: 12) {
-                    directoryOptionButton(
-                        title: "Local",
-                        subtitle: "Pasta no seu Mac (recomendado para começar)",
-                        systemImage: "folder",
-                        style: .primary
-                    ) {
-                        model.pickLocal()
-                    }
-
-                    directoryOptionButton(
-                        title: "Cloud",
-                        subtitle: "Em breve — clique para mais informação",
-                        systemImage: "icloud",
-                        style: .secondary
-                    ) {
-                        showComingSoonAlert(for: "Cloud")
-                    }
-
-                    directoryOptionButton(
-                        title: "Drive",
-                        subtitle: "Em breve — clique para mais informação",
-                        systemImage: "externaldrive",
-                        style: .secondary
-                    ) {
-                        showComingSoonAlert(for: "Drive")
-                    }
-                }
-                .frame(maxWidth: 440)
-
-                Button("Continuar mais tarde") {
-                    model.markCompletedAndDismiss()
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
             }
-            .padding(32)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.35), radius: 28, y: 12)
             .padding(40)
         }
+    }
+
+    private var chooseDirectoryCard: some View {
+        VStack(spacing: 24) {
+            VStack(spacing: 8) {
+                Text("Escolha o Diretório")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("Onde pretende guardar o seu vault? Pode alterar isto mais tarde nas definições.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+
+            VStack(spacing: 12) {
+                directoryOptionButton(
+                    title: "Local",
+                    subtitle: "Pasta no seu Mac (recomendado para começar)",
+                    systemImage: "folder",
+                    style: .primary
+                ) {
+                    model.pickLocal()
+                }
+
+                directoryOptionButton(
+                    title: "Cloud",
+                    subtitle: "Em breve — clique para mais informação",
+                    systemImage: "icloud",
+                    style: .secondary
+                ) {
+                    showComingSoonAlert(for: "Cloud")
+                }
+
+                directoryOptionButton(
+                    title: "Drive",
+                    subtitle: "Em breve — clique para mais informação",
+                    systemImage: "externaldrive",
+                    style: .secondary
+                ) {
+                    showComingSoonAlert(for: "Drive")
+                }
+            }
+            .frame(maxWidth: 440)
+
+            Button("Continuar mais tarde") {
+                model.markCompletedAndDismiss()
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+        }
+        .padding(32)
+        .frame(maxWidth: 520)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.35), radius: 28, y: 12)
+    }
+
+    private var activateBrainCard: some View {
+        VStack(spacing: 24) {
+            VStack(spacing: 8) {
+                Text("Ative o seu cérebro")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("Personalize a experiência com o seu nome. Pode alterar isto mais tarde.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("O seu nome")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                TextField("O seu nome", text: $brainDisplayName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.body)
+            }
+            .frame(maxWidth: 400)
+
+            HStack(spacing: 16) {
+                Button("Voltar") {
+                    model.goBackToChooseDirectory()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Spacer(minLength: 0)
+
+                Button("Continuar") {
+                    model.markCompletedAndDismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+            .frame(maxWidth: 400)
+        }
+        .padding(32)
+        .frame(maxWidth: 520)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.35), radius: 28, y: 12)
     }
 
     private enum OptionStyle {
