@@ -6,6 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { X, Loader2 } from "lucide-react";
 import type { VaultGraph } from "@/lib/vault";
 import { forceCenter, forceX, forceY } from "d3-force-3d";
+import { emitNativeDebug } from "@/lib/nativeDebug";
 import type {
   ForceGraphMethods,
   GraphData,
@@ -179,6 +180,10 @@ type BrainLink = {
   target: string;
   distance: number;
   strength: number;
+};
+
+type ForceGraphSnapshot = {
+  graphData?: () => GraphData<BrainNode, BrainLink>;
 };
 
 function linkKey(a: string, b: string): string {
@@ -463,6 +468,77 @@ export default function BrainGraphView({
   }, [graphKey, isNativeShell, useVault]);
 
   useEffect(() => {
+    if (!isNativeShell || !useVault || loading) {
+      return;
+    }
+
+    let frameCount = 0;
+    let rafId = 0;
+    let disposed = false;
+
+    const countFrames = () => {
+      if (disposed) return;
+      frameCount += 1;
+      rafId = requestAnimationFrame(countFrames);
+    };
+    rafId = requestAnimationFrame(countFrames);
+
+    const timer = window.setInterval(() => {
+      const fg = fgRef.current;
+      const snapshot = (fg as unknown as ForceGraphSnapshot | undefined)?.graphData?.();
+      const nodes = (snapshot?.nodes ?? []) as Array<NodeObject<BrainNode>>;
+      const links = snapshot?.links?.length ?? 0;
+
+      let minX = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      let finiteNodes = 0;
+      let nonFiniteNodes = 0;
+
+      for (const node of nodes) {
+        const x = node.x;
+        const y = node.y;
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          finiteNodes += 1;
+          minX = Math.min(minX, x!);
+          maxX = Math.max(maxX, x!);
+          minY = Math.min(minY, y!);
+          maxY = Math.max(maxY, y!);
+        } else {
+          nonFiniteNodes += 1;
+        }
+      }
+
+      const spreadW = finiteNodes > 0 ? maxX - minX : 0;
+      const spreadH = finiteNodes > 0 ? maxY - minY : 0;
+      const fps = frameCount;
+      frameCount = 0;
+
+      emitNativeDebug("brain-graph-stats", {
+        graphKey,
+        dimsW: dims.w,
+        dimsH: dims.h,
+        nodes: nodes.length,
+        links,
+        finiteNodes,
+        nonFiniteNodes,
+        spreadW: Math.round(spreadW),
+        spreadH: Math.round(spreadH),
+        hoverId: hoverId ?? "",
+        highlightLinks: highlightLinks.size,
+        fpsApprox: fps,
+      });
+    }, 1000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      cancelAnimationFrame(rafId);
+    };
+  }, [dims.h, dims.w, graphKey, highlightLinks.size, hoverId, isNativeShell, loading, useVault]);
+
+  useEffect(() => {
     if (!isNativeShell || !useVault || dims.w < 64 || dims.h < 64) {
       return;
     }
@@ -649,8 +725,18 @@ export default function BrainGraphView({
         const id = String(node.id);
         setHoverId(id);
         updateLinkHighlight(id);
+        emitNativeDebug("brain-node-click-native", {
+          id,
+          label: node.name ?? "",
+          x: typeof node.x === "number" ? Math.round(node.x) : null,
+          y: typeof node.y === "number" ? Math.round(node.y) : null,
+        });
         return;
       }
+      emitNativeDebug("brain-node-click-web", {
+        id: String(node.id),
+        label: node.name ?? "",
+      });
       onOpenConversationFromNode(String(node.id), node.name);
     },
     [isNativeShell, onOpenConversationFromNode, updateLinkHighlight]
@@ -676,6 +762,7 @@ export default function BrainGraphView({
     const fitKey = `${graphKey}|${dims.w}x${dims.h}`;
     if (fitDoneKey.current === fitKey) return;
     fitDoneKey.current = fitKey;
+    emitNativeDebug("brain-engine-stop", { graphKey, fitKey, dimsW: dims.w, dimsH: dims.h });
     fgRef.current?.zoomToFit(480, 36);
     if (isNativeShell && useVault) {
       window.setTimeout(() => fgRef.current?.d3ReheatSimulation(), 140);
@@ -685,6 +772,7 @@ export default function BrainGraphView({
   const onBackgroundClick = useCallback((_event: MouseEvent) => {
     setHoverId(null);
     setHighlightLinks(new Set());
+    emitNativeDebug("brain-background-click", { graphKey });
   }, []);
 
   return (

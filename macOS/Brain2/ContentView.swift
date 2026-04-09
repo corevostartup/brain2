@@ -161,6 +161,12 @@ struct WebView: NSViewRepresentable {
 
             if type == "startGoogleSignIn" {
                 startGoogleSignInWithSystemBrowser()
+                return
+            }
+
+            if type == "debugLog" {
+                let debugPayload = payload["payload"] as? [String: Any] ?? [:]
+                handleNativeDebugLog(debugPayload)
             }
         }
 
@@ -502,9 +508,70 @@ struct WebView: NSViewRepresentable {
                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'startGoogleSignIn' });
               } catch (_) {}
             };
+            window.Brain2Native.debugLog = function (payload) {
+              try {
+                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'debugLog', payload: payload || {} });
+              } catch (_) {}
+            };
+            if (!window.__brain2ConsolePatched) {
+              window.__brain2ConsolePatched = true;
+              const levels = ['log', 'info', 'warn', 'error'];
+              const toSafeString = (value) => {
+                if (value == null) return String(value);
+                if (typeof value === 'string') return value;
+                try { return JSON.stringify(value); } catch (_) { return String(value); }
+              };
+              levels.forEach((level) => {
+                const original = console[level] ? console[level].bind(console) : null;
+                console[level] = function (...args) {
+                  try {
+                    window.Brain2Native.debugLog({
+                      event: 'web-console',
+                      payload: { level, args: args.map(toSafeString) }
+                    });
+                  } catch (_) {}
+                  if (original) original(...args);
+                };
+              });
+              window.addEventListener('error', (ev) => {
+                try {
+                  window.Brain2Native.debugLog({
+                    event: 'web-error',
+                    payload: {
+                      message: ev.message || '',
+                      source: ev.filename || '',
+                      line: ev.lineno || 0,
+                      column: ev.colno || 0
+                    }
+                  });
+                } catch (_) {}
+              });
+              window.addEventListener('unhandledrejection', (ev) => {
+                try {
+                  window.Brain2Native.debugLog({
+                    event: 'web-unhandledrejection',
+                    payload: { reason: toSafeString(ev.reason) }
+                  });
+                } catch (_) {}
+              });
+            }
             window.dispatchEvent(new CustomEvent('brain2-native-bridge-ready'));
             """
             webView?.evaluateJavaScript(script, completionHandler: nil)
+        }
+
+        private func handleNativeDebugLog(_ payload: [String: Any]) {
+            #if DEBUG
+            let event = payload["event"] as? String ?? "unknown"
+            if
+                let payloadData = try? JSONSerialization.data(withJSONObject: payload, options: [.fragmentsAllowed]),
+                let payloadString = String(data: payloadData, encoding: .utf8)
+            {
+                NSLog("[Brain2 Debug] \(event): \(payloadString)")
+            } else {
+                NSLog("[Brain2 Debug] \(event): \(payload)")
+            }
+            #endif
         }
 
         private func saveConversationToVault(_ payload: [String: Any]) {

@@ -42,6 +42,7 @@ import {
   coerceNativeVaultGraph,
   fingerprintNativeVaultState,
 } from "@/lib/nativeVaultPayload";
+import { emitNativeDebug, isNativeShellBridgeAvailable } from "@/lib/nativeDebug";
 import { requestGoogleDriveAccessToken } from "@/lib/googleDrive";
 import { loadVaultFromGoogleDriveFolder } from "@/lib/googleDriveVault";
 
@@ -95,6 +96,7 @@ type NativeBridge = {
   isAvailable?: boolean;
   startGoogleSignIn?: () => void;
   pickDirectory?: () => void;
+  debugLog?: (payload: unknown) => void;
   saveConversation?: (payload: {
     conversationId: string;
     title: string;
@@ -104,10 +106,7 @@ type NativeBridge = {
 };
 
 function isBrain2NativeAppShell(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  return Boolean((window as unknown as { Brain2Native?: NativeBridge }).Brain2Native?.isAvailable);
+  return isNativeShellBridgeAvailable();
 }
 
 
@@ -240,6 +239,57 @@ function parseWikilinks(content: string): string[] {
   return links;
 }
 
+function normalizeGraphNodeId(raw: string): string {
+  return raw
+    .normalize("NFC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function sanitizeVaultGraph(graph: VaultGraph): VaultGraph {
+  const nodeLabelById = new Map<string, string>();
+
+  for (const node of graph.nodes) {
+    const rawId = typeof node.id === "string" ? node.id : String(node.id ?? "");
+    const id = normalizeGraphNodeId(rawId);
+    if (!id) continue;
+    const labelSource = (node.label ?? "").trim();
+    if (!nodeLabelById.has(id)) {
+      nodeLabelById.set(id, labelSource || rawId.trim() || id);
+    }
+  }
+
+  const edgeSet = new Set<string>();
+  const edges: Array<{ source: string; target: string }> = [];
+
+  for (const edge of graph.edges) {
+    const source = normalizeGraphNodeId(typeof edge.source === "string" ? edge.source : String(edge.source ?? ""));
+    const target = normalizeGraphNodeId(typeof edge.target === "string" ? edge.target : String(edge.target ?? ""));
+    if (!source || !target || source === target) {
+      continue;
+    }
+
+    // Garantia forte: qualquer endpoint de aresta vira nó válido.
+    if (!nodeLabelById.has(source)) {
+      nodeLabelById.set(source, source);
+    }
+    if (!nodeLabelById.has(target)) {
+      nodeLabelById.set(target, target);
+    }
+
+    const edgeKey = source < target ? `${source}::${target}` : `${target}::${source}`;
+    if (edgeSet.has(edgeKey)) {
+      continue;
+    }
+    edgeSet.add(edgeKey);
+    edges.push({ source, target });
+  }
+
+  const nodes = Array.from(nodeLabelById.entries()).map(([id, label]) => ({ id, label }));
+  return { nodes, edges };
+}
+
 function buildGraphFromConversations(conversations: VaultConversation[]): VaultGraph {
   const nodeMap = new Map<string, string>();
 
@@ -290,11 +340,11 @@ function normalizeGraph(
 ): VaultGraph | null {
   const hasValidGraph = Boolean(graph && Array.isArray(graph.nodes) && Array.isArray(graph.edges));
   if (hasValidGraph && (graph?.nodes.length ?? 0) > 0) {
-    return graph ?? null;
+    return sanitizeVaultGraph(graph ?? { nodes: [], edges: [] });
   }
 
   if (conversations.length === 0) {
-    return hasValidGraph ? (graph ?? null) : null;
+    return hasValidGraph ? sanitizeVaultGraph(graph ?? { nodes: [], edges: [] }) : null;
   }
 
   return buildGraphFromConversations(conversations);
@@ -323,6 +373,7 @@ export default function Home() {
   const hasNativeVaultDataRef = useRef(false);
   /** Evita reaplicar o mesmo payload nativo; inclui max(modifiedAt) para detetar ficheiros alterados. */
   const lastNativeVaultFingerprintRef = useRef<string>("");
+  const activeViewTraceRef = useRef<string>("");
   const [hasCloudVaultData, setHasCloudVaultData] = useState(false);
   const [vaultDataVersion, setVaultDataVersion] = useState(0);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -469,6 +520,38 @@ export default function Home() {
         : isChatOpen || chatMessages.length > 0 || chatLoading || Boolean(chatError)
           ? "chat"
         : "home";
+
+  useEffect(() => {
+    const previous = activeViewTraceRef.current;
+    if (previous === activeView) {
+      return;
+    }
+    activeViewTraceRef.current = activeView;
+    emitNativeDebug("page-active-view", {
+      from: previous || null,
+      to: activeView,
+      isYourBrainOpen,
+      isChatOpen,
+      isSettingsOpen,
+      isAdvancedVoiceOpen,
+      hasSelectedConversation: Boolean(selectedConversationId),
+      hasNativeVaultData,
+      hasCloudVaultData,
+      graphNodes: vaultGraph?.nodes?.length ?? 0,
+      graphEdges: vaultGraph?.edges?.length ?? 0,
+    });
+  }, [
+    activeView,
+    hasCloudVaultData,
+    hasNativeVaultData,
+    isAdvancedVoiceOpen,
+    isChatOpen,
+    isSettingsOpen,
+    isYourBrainOpen,
+    selectedConversationId,
+    vaultGraph?.edges?.length,
+    vaultGraph?.nodes?.length,
+  ]);
 
   const createMessageId = useCallback(() => {
     if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -644,7 +727,17 @@ export default function Home() {
         conversations: state.conversations,
       });
 
+      emitNativeDebug("native-vault-state-seen", {
+        fingerprint: fp,
+        path: state.path ?? "",
+        folders: state.folders?.length ?? 0,
+        conversations: state.conversations?.length ?? 0,
+        graphNodes: (graph as VaultGraph | null | undefined)?.nodes?.length ?? 0,
+        graphEdges: (graph as VaultGraph | null | undefined)?.edges?.length ?? 0,
+      });
+
       if (fp === lastNativeVaultFingerprintRef.current) {
+        emitNativeDebug("native-vault-state-ignored-duplicate", { fingerprint: fp });
         return;
       }
       lastNativeVaultFingerprintRef.current = fp;
@@ -976,8 +1069,16 @@ export default function Home() {
     });
 
     if (match) {
+      emitNativeDebug("brain-node-open-conversation-match", {
+        nodeId,
+        nodeLabel,
+        conversationId: match.id,
+        conversationTitle: match.title,
+      });
       handleConversationSelect(match, { fromYourBrain: true });
+      return;
     }
+    emitNativeDebug("brain-node-open-conversation-miss", { nodeId, nodeLabel });
   }, [vaultConversations, handleConversationSelect]);
 
   const handleCloseConversation = useCallback(() => {
