@@ -17,6 +17,10 @@ import ChatView from "@/components/ChatView";
 import SettingsView from "@/components/SettingsView";
 import LoginView from "@/components/LoginView";
 import AuthSplashScreen from "@/components/AuthSplashScreen";
+import {
+  WebDirectoryOnboarding,
+  readWebDirectoryOnboardingCompleted,
+} from "@/components/WebDirectoryOnboarding";
 import AdvancedVoiceSphereView from "@/components/AdvancedVoiceSphereView";
 import { PanelLeftOpen } from "lucide-react";
 import {
@@ -142,6 +146,8 @@ function callNativeFolderMutation(call: () => void): Promise<void> {
   });
 }
 
+const BRAIN2_SHELL_SESSION_KEY = "brain2-shell-persist";
+
 /** Shell macOS via query (?brain2-shell=macos) injetado pelo WKWebView — não depender só da bridge (ainda não existe no 1º paint). */
 function detectBrain2MacShellQuery(): boolean {
   if (typeof window === "undefined") return false;
@@ -152,8 +158,27 @@ function detectBrain2MacShellQuery(): boolean {
   }
 }
 
+/**
+ * Deteta app nativa Mac. Importante: o Next.js remove query params nas navegações — por isso persistimos em sessionStorage
+ * na primeira carga com ?brain2-shell=macos (senão `isNativeMacShell` voltava a false e o onboarding nativo deixava de ser pedido).
+ */
 function isBrain2NativeAppShell(): boolean {
-  if (detectBrain2MacShellQuery()) return true;
+  if (typeof window === "undefined") return false;
+  if (detectBrain2MacShellQuery()) {
+    try {
+      sessionStorage.setItem(BRAIN2_SHELL_SESSION_KEY, "macos");
+    } catch {
+      /* ignore */
+    }
+    return true;
+  }
+  try {
+    if (sessionStorage.getItem(BRAIN2_SHELL_SESSION_KEY) === "macos") {
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
   return isNativeShellBridgeAvailable();
 }
 
@@ -437,6 +462,12 @@ export default function Home() {
   const [isNativeMacShell, setIsNativeMacShell] = useState(() =>
     typeof window !== "undefined" && isBrain2NativeAppShell(),
   );
+  /** null = ainda não leu localStorage (evita flash no SSR); só browser — no shell Mac o onboarding é nativo Swift. */
+  const [webDirectoryOnboardingDone, setWebDirectoryOnboardingDone] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setWebDirectoryOnboardingDone(readWebDirectoryOnboardingCompleted());
+  }, []);
 
   useEffect(() => {
     const syncNativeShell = () => setIsNativeMacShell(isBrain2NativeAppShell());
@@ -1498,6 +1529,9 @@ export default function Home() {
 
   const shellHeight = isNativeMacShell ? "100%" : "100dvh";
 
+  const showWebDirectoryOnboarding =
+    webDirectoryOnboardingDone === false && !isNativeMacShell && isAuthenticated;
+
   return (
     <main
       style={{
@@ -1512,8 +1546,16 @@ export default function Home() {
         padding: 0,
         margin: 0,
         border: "none",
+        position: "relative",
       }}
     >
+      {showWebDirectoryOnboarding && (
+        <WebDirectoryOnboarding
+          onCompleted={() => {
+            setWebDirectoryOnboardingDone(true);
+          }}
+        />
+      )}
       {!isSidebarHidden && (
         <DesktopSidebar
           onHide={() => setIsSidebarHidden(true)}

@@ -82,16 +82,18 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
                 .allowsHitTesting(!directoryOnboarding.isPresented)
+
+            /// Overlay em ecrã completo (evita `.sheet` no macOS que por vezes não aparece por cima do WKWebView).
+            if directoryOnboarding.isPresented {
+                DirectoryOnboardingOverlay(model: directoryOnboarding, dimBackground: true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .zIndex(1_000_000)
+                    .transition(.opacity)
+            }
         }
         .ignoresSafeArea()
         .background(appChromeBackground)
         .background(WindowChromeConfigurator())
-        /// Folha nativa: o WKWebView costuma ficar por cima de overlays SwiftUI na mesma janela; o sheet ancora à janela e funciona bem com vários monitores.
-        .sheet(isPresented: $directoryOnboarding.isPresented) {
-            DirectoryOnboardingOverlay(model: directoryOnboarding, dimBackground: false)
-                .frame(minWidth: 520, minHeight: 420)
-                .interactiveDismissDisabled(true)
-        }
     }
 }
 
