@@ -121,6 +121,21 @@ struct WebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             injectNativeBridge()
             publishPersistedVaultIfAvailable()
+            promptRepickIfLegacyPathWithoutBookmark()
+        }
+
+        /// Instalações antigas só tinham o caminho em texto; no sandbox isso não dá acesso de escrita.
+        private func promptRepickIfLegacyPathWithoutBookmark() {
+            let path = UserDefaults.standard.string(forKey: Self.selectedVaultPathDefaultsKey) ?? ""
+            let hasBookmark = UserDefaults.standard.data(forKey: Self.selectedVaultBookmarkDefaultsKey) != nil
+            guard !path.isEmpty, !hasBookmark else { return }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                self?.showVaultAccessAlert(
+                    title: "Volte a escolher a pasta do vault",
+                    text: "Para o Brain2 poder gravar no disco, abra Configurações → Vault → Local e toque em «Escolher diretório». O macOS memoriza o acesso com segurança (uma vez)."
+                )
+            }
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -576,6 +591,9 @@ struct WebView: NSViewRepresentable {
 
         private func saveConversationToVault(_ payload: [String: Any]) {
             guard let vaultURL = resolvePersistedVaultURL() else {
+                #if DEBUG
+                NSLog("[Brain2 Native] saveConversationToVault: sem security-scoped bookmark — escolha o vault em Configurações (Local).")
+                #endif
                 return
             }
 
@@ -636,6 +654,9 @@ struct WebView: NSViewRepresentable {
 
                         try markdownToPersist.write(to: fileURL, atomically: true, encoding: .utf8)
                     } catch {
+                        #if DEBUG
+                        NSLog("[Brain2 Native] saveConversationToVault falhou: \(error.localizedDescription)")
+                        #endif
                         return
                     }
 
@@ -835,12 +856,47 @@ struct WebView: NSViewRepresentable {
 
                 guard panel.runModal() == .OK, let selectedURL = panel.url else { return }
 
-                UserDefaults.standard.set(selectedURL.path, forKey: Self.selectedVaultPathDefaultsKey)
-                if let bookmarkData = try? selectedURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
-                    UserDefaults.standard.set(bookmarkData, forKey: Self.selectedVaultBookmarkDefaultsKey)
+                // Com App Sandbox, só bookmarks com security scope permitem ler/gravar de forma fiável.
+                // Guardar só o caminho (path) não concede `startAccessingSecurityScopedResource`.
+                let bookmarkData: Data
+                do {
+                    bookmarkData = try selectedURL.bookmarkData(
+                        options: .withSecurityScope,
+                        includingResourceValuesForKeys: nil,
+                        relativeTo: nil
+                    )
+                } catch {
+                    self.showVaultAccessAlert(
+                        title: "Não foi possível memorizar a pasta",
+                        text: "O macOS não criou o acesso persistente a esta pasta: \(error.localizedDescription)\n\nTente outra pasta ou verifique as permissões."
+                    )
+                    return
                 }
-                self.publishVaultSelection(for: selectedURL)
+
+                UserDefaults.standard.set(bookmarkData, forKey: Self.selectedVaultBookmarkDefaultsKey)
+                UserDefaults.standard.set(selectedURL.path, forKey: Self.selectedVaultPathDefaultsKey)
+
+                guard let resolvedURL = self.resolvePersistedVaultURL() else {
+                    UserDefaults.standard.removeObject(forKey: Self.selectedVaultBookmarkDefaultsKey)
+                    UserDefaults.standard.removeObject(forKey: Self.selectedVaultPathDefaultsKey)
+                    self.showVaultAccessAlert(
+                        title: "Erro ao reabrir o vault",
+                        text: "O marcador da pasta não pôde ser usado. Escolha a pasta novamente."
+                    )
+                    return
+                }
+
+                self.publishVaultSelection(for: resolvedURL)
             }
+        }
+
+        private func showVaultAccessAlert(title: String, text: String) {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = text
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         }
 
         private func renameVaultFolder(_ payload: [String: Any]) {
@@ -883,16 +939,24 @@ struct WebView: NSViewRepresentable {
 
                         try self.fileManager.moveItem(at: currentVaultURL, to: nextVaultURL)
 
-                        UserDefaults.standard.set(nextVaultURL.path, forKey: Self.selectedVaultPathDefaultsKey)
-                        if let bookmarkData = try? nextVaultURL.bookmarkData(
-                            options: .withSecurityScope,
-                            includingResourceValuesForKeys: nil,
-                            relativeTo: nil
-                        ) {
-                            UserDefaults.standard.set(bookmarkData, forKey: Self.selectedVaultBookmarkDefaultsKey)
-                        } else {
-                            UserDefaults.standard.removeObject(forKey: Self.selectedVaultBookmarkDefaultsKey)
+                        let bookmarkData: Data
+                        do {
+                            bookmarkData = try nextVaultURL.bookmarkData(
+                                options: .withSecurityScope,
+                                includingResourceValuesForKeys: nil,
+                                relativeTo: nil
+                            )
+                        } catch {
+                            try? self.fileManager.moveItem(at: nextVaultURL, to: currentVaultURL)
+                            self.publishVaultRenameResult(
+                                success: false,
+                                errorMessage: "Nao foi possivel memorizar o acesso a pasta renomeada: \(error.localizedDescription)"
+                            )
+                            return
                         }
+
+                        UserDefaults.standard.set(nextVaultURL.path, forKey: Self.selectedVaultPathDefaultsKey)
+                        UserDefaults.standard.set(bookmarkData, forKey: Self.selectedVaultBookmarkDefaultsKey)
 
                         self.publishVaultSelection(for: nextVaultURL)
                         self.publishVaultRenameResult(success: true, errorMessage: nil)
@@ -967,34 +1031,51 @@ struct WebView: NSViewRepresentable {
             }
         }
 
+        /// URL obtida **apenas** a partir do security-scoped bookmark. O fallback por path não funciona
+        /// com App Sandbox (`startAccessingSecurityScopedResource` falha em URLs só com caminho).
         private func resolvePersistedVaultURL() -> URL? {
-            if
-                let bookmarkData = UserDefaults.standard.data(forKey: Self.selectedVaultBookmarkDefaultsKey)
-            {
-                var isStale = false
-                if let resolvedURL = try? URL(
+            guard let bookmarkData = UserDefaults.standard.data(forKey: Self.selectedVaultBookmarkDefaultsKey) else {
+                return nil
+            }
+
+            var isStale = false
+            guard
+                let resolvedURL = try? URL(
                     resolvingBookmarkData: bookmarkData,
                     options: [.withSecurityScope],
                     relativeTo: nil,
                     bookmarkDataIsStale: &isStale
+                )
+            else {
+                return nil
+            }
+
+            if isStale {
+                if let refreshed = try? resolvedURL.bookmarkData(
+                    options: .withSecurityScope,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
                 ) {
-                    if isStale,
-                       let refreshed = try? resolvedURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
-                        UserDefaults.standard.set(refreshed, forKey: Self.selectedVaultBookmarkDefaultsKey)
-                    }
-                    return resolvedURL
+                    UserDefaults.standard.set(refreshed, forKey: Self.selectedVaultBookmarkDefaultsKey)
                 }
             }
 
-            if let path = UserDefaults.standard.string(forKey: Self.selectedVaultPathDefaultsKey), !path.isEmpty {
-                return URL(fileURLWithPath: path, isDirectory: true)
+            if let path = UserDefaults.standard.string(forKey: Self.selectedVaultPathDefaultsKey),
+               !path.isEmpty,
+               resolvedURL.path != path {
+                UserDefaults.standard.set(resolvedURL.path, forKey: Self.selectedVaultPathDefaultsKey)
             }
 
-            return nil
+            return resolvedURL
         }
 
         private func withSecurityScopedAccess(to url: URL, perform: () -> Void) {
             let granted = url.startAccessingSecurityScopedResource()
+            #if DEBUG
+            if !granted {
+                NSLog("[Brain2 Native] startAccessingSecurityScopedResource falhou para \(url.path) — operações de ficheiro podem falhar (sandbox).")
+            }
+            #endif
             defer {
                 if granted {
                     url.stopAccessingSecurityScopedResource()

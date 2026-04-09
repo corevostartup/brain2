@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { X, FolderOpen, Check, Trash2, Cloud } from "lucide-react";
+import { X, FolderOpen, Trash2, Cloud } from "lucide-react";
 import {
   pickDirectory,
   saveDirectoryHandle,
@@ -311,6 +311,23 @@ export default function SettingsView({
     setTimeout(() => setStatus("idle"), 2000);
   };
 
+  const handleLocalDirectorySave = async () => {
+    if (nativePickerAvailable) {
+      if (!displayedVaultPath.trim()) {
+        setStatus("error");
+        return;
+      }
+      onCloudVaultSaved?.();
+      setStatus("saved");
+      setTimeout(() => setStatus("idle"), 2000);
+      return;
+    }
+    await handlePasteSave();
+  };
+
+  const localDirectoryInputReadOnly =
+    nativePickerAvailable || Boolean(vaultHandle) || pasteSaved;
+
   const handleVaultRename = async () => {
     if (!hasVaultSelection) {
       setVaultRenameStatus("error");
@@ -574,102 +591,82 @@ export default function SettingsView({
           {vaultStorageMode === "local" && (
             <>
               <p className="settings-description settings-description--tight">
-                Pasta no disco: app macOS (seletor Swift) ou navegador (File System Access). Compativel com vaults Obsidian.
+                Pasta no disco: app macOS (seletor nativo) ou navegador (File System Access). Compativel com vaults Obsidian.
               </p>
 
-              {nativePickerAvailable && (
-                <div className="native-picker-box">
-                  <button className="native-picker-btn" onClick={handlePickDirectory}>
-                    Escolher diretório via app Swift
+              <div className="cloud-directory-box">
+                <p className="cloud-directory-title">Diretório local</p>
+                <div className="cloud-directory-row">
+                  <input
+                    className="cloud-directory-input"
+                    type="text"
+                    value={displayedVaultPath}
+                    onChange={(event) => {
+                      if (localDirectoryInputReadOnly) return;
+                      handlePathChange(event);
+                      if (status !== "idle") {
+                        setStatus("idle");
+                      }
+                    }}
+                    placeholder="/Users/seu-usuario/Documents/MeuVault"
+                    spellCheck={false}
+                    readOnly={localDirectoryInputReadOnly}
+                  />
+                  <button
+                    className="cloud-directory-pick-btn"
+                    type="button"
+                    onClick={() => {
+                      void handlePickDirectory();
+                    }}
+                  >
+                    Escolher diretório
                   </button>
-                  <p className="native-picker-hint">
-                    Usa o seletor nativo do macOS e atualiza Pastas e Your Brain automaticamente.
-                  </p>
+                  <button
+                    className="cloud-directory-save-btn"
+                    type="button"
+                    onClick={() => {
+                      void handleLocalDirectorySave();
+                    }}
+                    disabled={
+                      nativePickerAvailable
+                        ? !displayedVaultPath.trim()
+                        : !vaultPath.trim() || pasteSaved
+                    }
+                  >
+                    Salvar
+                  </button>
                 </div>
-              )}
 
-              {hasVaultSelection ? (
-                <div className="vault-current">
-                  <div className="vault-current-info">
-                    <FolderOpen size={14} strokeWidth={1.8} />
-                    <input
-                      className="vault-path-input"
-                      type="text"
-                      value={displayedVaultPath}
-                      placeholder="Caminho do vault"
-                      spellCheck={false}
-                      readOnly
-                    />
-                    {status === "saved" && (
-                      <span className="vault-saved-badge">
-                        <Check size={11} strokeWidth={2} />
-                        Salvo
-                      </span>
-                    )}
-                  </div>
-                  <div className="vault-current-actions">
-                    <button className="vault-change-btn" onClick={handlePickDirectory} type="button">
-                      Alterar
+                {!nativePickerAvailable && Boolean(vaultHandle) && (
+                  <div className="local-directory-footer">
+                    <button
+                      className="vault-remove-btn"
+                      type="button"
+                      onClick={handleRemoveVault}
+                      aria-label="Remover pasta do vault"
+                    >
+                      <Trash2 size={13} strokeWidth={1.8} />
+                      <span>Remover pasta</span>
                     </button>
-                    {!nativePickerAvailable && (
-                      <button
-                        className="vault-remove-btn"
-                        onClick={handleRemoveVault}
-                        aria-label="Remover vault"
-                        type="button"
-                      >
-                        <Trash2 size={13} strokeWidth={1.8} />
-                      </button>
-                    )}
                   </div>
-                </div>
-              ) : (
-                <div className="vault-empty">
-                  <div className="vault-paste-row">
-                    <label className={`vault-paste-field${pasteSaved ? " vault-paste-field--saved" : ""}`}>
-                      <button
-                        className="vault-folder-icon-btn"
-                        type="button"
-                        onClick={handlePickDirectory}
-                        aria-label="Escolher diretório"
-                        title="Escolher diretório"
-                      >
-                        <FolderOpen size={14} strokeWidth={1.8} />
-                      </button>
-                      <input
-                        type="text"
-                        value={vaultPath}
-                        onChange={handlePathChange}
-                        placeholder="/Users/seu-usuario/Documents/MeuVault"
-                        spellCheck={false}
-                        readOnly={pasteSaved}
-                      />
-                    </label>
-                    {pasteSaved ? (
-                      <button
-                        className="vault-paste-saved-btn"
-                        type="button"
-                        onClick={() => setPasteSaved(false)}
-                      >
-                        <Check size={13} strokeWidth={2} />
-                        Salvo
-                      </button>
-                    ) : (
-                      <button
-                        className="vault-paste-save-btn"
-                        type="button"
-                        onClick={handlePasteSave}
-                        disabled={!vaultPath.trim()}
-                      >
-                        Salvar
-                      </button>
-                    )}
-                  </div>
-                  {status === "error" && (
-                    <p className="vault-error-hint">Selecione um diretório no icone de pasta antes de salvar.</p>
-                  )}
-                </div>
-              )}
+                )}
+
+                {status === "saved" ? (
+                  <p className="vault-success-hint">Configuracao do vault salva com sucesso.</p>
+                ) : status === "error" ? (
+                  <p className="vault-error-hint">
+                    {nativePickerAvailable
+                      ? "Escolha um diretório com o botão acima antes de salvar."
+                      : "Selecione uma pasta com Escolher diretório antes de salvar."}
+                  </p>
+                ) : (
+                  <p className="vault-hint">
+                    {nativePickerAvailable
+                      ? "Escolher diretório abre o painel do macOS. Salvar recarrega Pastas e Your Brain com o caminho atual."
+                      : "Escolher diretório pede permissão de leitura no navegador. Salvar associa a pasta a esta origem."}
+                  </p>
+                )}
+              </div>
 
               <div className="vault-rename-box">
                 <p className="vault-rename-title">Nome do Vault</p>
@@ -1072,6 +1069,18 @@ export default function SettingsView({
           opacity: 0.45;
         }
 
+        .local-directory-footer {
+          display: flex;
+          justify-content: flex-end;
+        }
+
+        .local-directory-footer .vault-remove-btn {
+          width: auto;
+          min-height: 32px;
+          padding: 0 10px;
+          gap: 6px;
+        }
+
         .drive-picker-backdrop {
           position: fixed;
           inset: 0;
@@ -1344,40 +1353,6 @@ export default function SettingsView({
           }
         }
 
-        .native-picker-box {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-          padding: 10px 12px;
-          border: 1px solid var(--bar-border);
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.02);
-        }
-
-        .native-picker-btn {
-          height: 34px;
-          border: 1px solid var(--bar-border);
-          border-radius: 9px;
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--foreground);
-          font-family: 'Inter', sans-serif;
-          font-size: 12px;
-          font-weight: 500;
-          transition: background 0.15s ease, border-color 0.15s ease;
-        }
-
-        .native-picker-btn:hover {
-          background: var(--pill-active);
-          border-color: var(--bar-border-hover);
-        }
-
-        .native-picker-hint {
-          margin: 0;
-          font-family: 'Inter', sans-serif;
-          font-size: 11px;
-          color: var(--muted);
-        }
-
         .settings-section h3 {
           margin: 0;
           font-family: 'Inter', sans-serif;
@@ -1404,81 +1379,6 @@ export default function SettingsView({
           color: var(--muted-hover);
         }
 
-        .vault-current {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          padding: 10px 12px;
-          border: 1px solid var(--bar-border);
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.02);
-        }
-
-        .vault-current-info {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          color: var(--muted);
-          min-width: 0;
-          flex: 1;
-        }
-
-        .vault-path-input {
-          flex: 1;
-          border: none;
-          background: transparent;
-          font-family: 'Inter', sans-serif;
-          font-size: 12px;
-          font-weight: 500;
-          color: var(--foreground);
-          min-width: 0;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .vault-path-input::placeholder {
-          color: #444;
-        }
-
-        .vault-path-input:read-only {
-          cursor: default;
-        }
-
-        .vault-saved-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 3px;
-          font-family: 'Inter', sans-serif;
-          font-size: 10px;
-          color: #48bf84;
-          white-space: nowrap;
-        }
-
-        .vault-current-actions {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          flex-shrink: 0;
-        }
-
-        .vault-change-btn {
-          height: 28px;
-          padding: 0 12px;
-          border: 1px solid var(--bar-border);
-          border-radius: 8px;
-          background: transparent;
-          color: var(--foreground);
-          font-family: 'Inter', sans-serif;
-          font-size: 11px;
-          transition: background 0.15s ease;
-        }
-
-        .vault-change-btn:hover {
-          background: var(--pill-active);
-        }
-
         .vault-remove-btn {
           display: flex;
           align-items: center;
@@ -1495,120 +1395,6 @@ export default function SettingsView({
         .vault-remove-btn:hover {
           background: rgba(220, 60, 60, 0.1);
           color: #dc3c3c;
-        }
-
-        .vault-empty {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-        }
-
-        .vault-paste-row {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        .vault-paste-field {
-          flex: 1;
-          display: flex;
-          align-items: center;
-          gap: 0;
-          height: 40px;
-          border-radius: 10px;
-          border: 1px solid var(--bar-border);
-          background: rgba(255, 255, 255, 0.02);
-          padding: 0 12px 0 0;
-          color: var(--muted);
-          transition: border-color 0.15s ease, opacity 0.3s ease;
-        }
-
-        .vault-paste-field--saved {
-          opacity: 0.45;
-        }
-
-        .vault-paste-field:focus-within {
-          border-color: var(--bar-border-hover);
-        }
-
-        .vault-folder-icon-btn {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          width: 36px;
-          height: 38px;
-          border: none;
-          border-radius: 9px 0 0 9px;
-          background: transparent;
-          color: var(--muted);
-          flex-shrink: 0;
-          cursor: pointer;
-          transition: background 0.15s ease, color 0.15s ease;
-        }
-
-        .vault-folder-icon-btn:hover {
-          background: var(--pill-active);
-          color: var(--foreground);
-        }
-
-        .vault-paste-field input {
-          flex: 1;
-          border: none;
-          background: transparent;
-          font-family: 'Inter', sans-serif;
-          font-size: 12px;
-          color: var(--foreground);
-          min-width: 0;
-        }
-
-        .vault-paste-field input::placeholder {
-          color: #444;
-        }
-
-        .vault-paste-save-btn {
-          height: 40px;
-          padding: 0 16px;
-          border: 1px solid var(--bar-border);
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--foreground);
-          font-family: 'Inter', sans-serif;
-          font-size: 12px;
-          font-weight: 500;
-          white-space: nowrap;
-          flex-shrink: 0;
-          transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
-        }
-
-        .vault-paste-save-btn:hover:not(:disabled) {
-          background: var(--pill-active);
-          border-color: var(--bar-border-hover);
-        }
-
-        .vault-paste-save-btn:disabled {
-          opacity: 0.35;
-        }
-
-        .vault-paste-saved-btn {
-          height: 40px;
-          padding: 0 14px;
-          border: 1px solid rgba(72, 191, 132, 0.2);
-          border-radius: 10px;
-          background: transparent;
-          color: #48bf84;
-          font-family: 'Inter', sans-serif;
-          font-size: 12px;
-          font-weight: 500;
-          display: flex;
-          align-items: center;
-          gap: 5px;
-          white-space: nowrap;
-          flex-shrink: 0;
-          transition: background 0.15s ease;
-        }
-
-        .vault-paste-saved-btn:hover {
-          background: rgba(72, 191, 132, 0.06);
         }
 
         .vault-error-hint {

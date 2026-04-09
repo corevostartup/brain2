@@ -16,6 +16,7 @@ import ConversationView from "@/components/ConversationView";
 import ChatView from "@/components/ChatView";
 import SettingsView from "@/components/SettingsView";
 import LoginView from "@/components/LoginView";
+import AuthSplashScreen from "@/components/AuthSplashScreen";
 import AdvancedVoiceSphereView from "@/components/AdvancedVoiceSphereView";
 import { PanelLeftOpen } from "lucide-react";
 import {
@@ -1334,8 +1335,12 @@ export default function Home() {
     }
   }, []);
 
-  if (isAuthInitializing || !isAuthenticated) {
-    return <LoginView onLogin={handleLogin} authLoading={isAuthInitializing} authError={authError} />;
+  if (isAuthInitializing) {
+    return <AuthSplashScreen />;
+  }
+
+  if (!isAuthenticated) {
+    return <LoginView onLogin={handleLogin} authLoading={false} authError={authError} />;
   }
 
   const shellHeight = isNativeMacShell ? "100%" : "100dvh";
