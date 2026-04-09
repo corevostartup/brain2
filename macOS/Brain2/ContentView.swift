@@ -164,6 +164,18 @@ struct WebView: NSViewRepresentable {
                 return
             }
 
+            if type == "createFolder" {
+                let folderPayload = payload["payload"] as? [String: Any] ?? [:]
+                createVaultSubfolderFromWeb(folderPayload)
+                return
+            }
+
+            if type == "renameFolder" {
+                let folderPayload = payload["payload"] as? [String: Any] ?? [:]
+                renameVaultSubfolderFromWeb(folderPayload)
+                return
+            }
+
             if type == "saveLlmConfig" {
                 let llmPayload = payload["payload"] as? [String: Any] ?? [:]
                 saveLlmConfig(llmPayload)
@@ -503,6 +515,16 @@ struct WebView: NSViewRepresentable {
                                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'renameVault', payload: payload || {} });
                             } catch (_) {}
                         };
+            window.Brain2Native.createFolder = function (payload) {
+              try {
+                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'createFolder', payload: payload || {} });
+              } catch (_) {}
+            };
+            window.Brain2Native.renameFolder = function (payload) {
+              try {
+                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'renameFolder', payload: payload || {} });
+              } catch (_) {}
+            };
             window.Brain2Native.saveConversation = function (payload) {
               try {
                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'saveConversation', payload: payload || {} });
@@ -1010,6 +1032,307 @@ struct WebView: NSViewRepresentable {
             }
         }
 
+        private func publishFolderMutationResult(success: Bool, errorMessage: String?) {
+            var payload: [String: Any] = ["success": success]
+            if let errorMessage, !errorMessage.isEmpty {
+                payload["error"] = errorMessage
+            }
+
+            guard JSONSerialization.isValidJSONObject(payload) else { return }
+            guard
+                let payloadData = try? JSONSerialization.data(withJSONObject: payload),
+                let payloadJSON = String(data: payloadData, encoding: .utf8)
+            else {
+                return
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                let script = """
+                window.dispatchEvent(new CustomEvent('brain2-native-folder-mutation-result', { detail: \(payloadJSON) }));
+                """
+                self?.webView?.evaluateJavaScript(script, completionHandler: nil)
+            }
+        }
+
+        private func normalizeFolderPathSegments(_ raw: String) -> String {
+            raw
+                .replacingOccurrences(of: "\\", with: "/")
+                .split(separator: "/")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
+                .joined(separator: "/")
+        }
+
+        private func validateSubfolderName(_ raw: String) throws -> String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 10,
+                    userInfo: [NSLocalizedDescriptionKey: "O nome da pasta e obrigatorio."]
+                )
+            }
+
+            if trimmed == "." || trimmed == ".." || trimmed.contains("/") || trimmed.contains("\\") {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 11,
+                    userInfo: [NSLocalizedDescriptionKey: "Nome de pasta invalido."]
+                )
+            }
+
+            return trimmed
+        }
+
+        private func resolveUnderVault(vaultURL: URL, relativePath: String) throws -> URL {
+            let normalized = normalizeFolderPathSegments(relativePath)
+            let rootPath = vaultURL.standardizedFileURL.path
+            var url = vaultURL
+            if !normalized.isEmpty {
+                for component in normalized.split(separator: "/") {
+                    url.appendPathComponent(String(component), isDirectory: true)
+                }
+            }
+
+            let targetPath = url.standardizedFileURL.path
+            guard targetPath == rootPath || targetPath.hasPrefix(rootPath + "/") else {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 12,
+                    userInfo: [NSLocalizedDescriptionKey: "Caminho invalido fora do vault."]
+                )
+            }
+
+            return url
+        }
+
+        private func hasWikilinkTarget(markdown: String, target: String) -> Bool {
+            let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return false }
+            return parseWikilinks(from: markdown).contains { link in
+                link.compare(trimmed, options: .caseInsensitive) == .orderedSame
+            }
+        }
+
+        private func insertFolderCorrelationWikilinkInMetadata(markdown: String, target: String) -> String {
+            let trimmedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedTarget.isEmpty else { return markdown }
+            if hasWikilinkTarget(markdown: markdown, target: trimmedTarget) {
+                return markdown
+            }
+
+            let correlationLine = "- Correlation: [[\(trimmedTarget)]]"
+            var lines = markdown.components(separatedBy: .newlines)
+
+            if let modelIndex = lines.firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("- model:")
+            }) {
+                lines.insert(correlationLine, at: modelIndex + 1)
+                return lines.joined(separator: "\n")
+            }
+
+            if let firstMetadataIndex = lines.firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("- ")
+            }) {
+                var insertIndex = firstMetadataIndex
+                while insertIndex < lines.count, lines[insertIndex].trimmingCharacters(in: .whitespaces).hasPrefix("- ") {
+                    insertIndex += 1
+                }
+                lines.insert(correlationLine, at: insertIndex)
+                return lines.joined(separator: "\n")
+            }
+
+            if let firstLine = lines.first, firstLine.trimmingCharacters(in: .whitespaces).hasPrefix("#") {
+                let insertIndex = (lines.count > 1 && lines[1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ? 2 : 1
+                lines.insert(correlationLine, at: insertIndex)
+                return lines.joined(separator: "\n")
+            }
+
+            return "\(correlationLine)\n\(markdown)"
+        }
+
+        private func ensureMarkdownCorrelationWikilink(fileURL: URL, targetWikilinkName: String) throws {
+            var isDirectory: ObjCBool = false
+            let existing: String
+            if fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) {
+                if isDirectory.boolValue {
+                    throw NSError(
+                        domain: "Brain2Native",
+                        code: 13,
+                        userInfo: [NSLocalizedDescriptionKey: "O destino da correlacao nao e um ficheiro."]
+                    )
+                }
+                existing = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
+            } else {
+                existing = ""
+            }
+
+            let next = insertFolderCorrelationWikilinkInMetadata(markdown: existing, target: targetWikilinkName)
+            let normalized = next.hasSuffix("\n") ? next : "\(next)\n"
+            try normalized.write(to: fileURL, atomically: true, encoding: .utf8)
+        }
+
+        private func performCreateVaultSubfolder(vaultURL: URL, parentRelativePath: String, folderName: String) throws {
+            let safeName = try validateSubfolderName(folderName)
+            let normalizedParentPath = normalizeFolderPathSegments(parentRelativePath)
+            let parentURL = try resolveUnderVault(vaultURL: vaultURL, relativePath: normalizedParentPath)
+
+            var isParentDir: ObjCBool = false
+            guard fileManager.fileExists(atPath: parentURL.path, isDirectory: &isParentDir), isParentDir.boolValue else {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 14,
+                    userInfo: [NSLocalizedDescriptionKey: "A pasta pai nao existe."]
+                )
+            }
+
+            let nextURL = parentURL.appendingPathComponent(safeName, isDirectory: true)
+            if fileManager.fileExists(atPath: nextURL.path) {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 15,
+                    userInfo: [NSLocalizedDescriptionKey: "Ja existe uma pasta com este nome."]
+                )
+            }
+
+            try fileManager.createDirectory(at: nextURL, withIntermediateDirectories: false, attributes: nil)
+
+            let bootstrapURL = nextURL.appendingPathComponent("\(safeName).md")
+            do {
+                guard fileManager.createFile(atPath: bootstrapURL.path, contents: Data(), attributes: nil) else {
+                    throw NSError(
+                        domain: "Brain2Native",
+                        code: 16,
+                        userInfo: [NSLocalizedDescriptionKey: "Nao foi possivel criar o ficheiro da pasta."]
+                    )
+                }
+
+                if !normalizedParentPath.isEmpty {
+                    let parentFolderName = (normalizedParentPath as NSString).lastPathComponent
+                    try ensureMarkdownCorrelationWikilink(fileURL: bootstrapURL, targetWikilinkName: parentFolderName)
+                    let parentCorrURL = parentURL.appendingPathComponent("\(parentFolderName).md")
+                    try ensureMarkdownCorrelationWikilink(fileURL: parentCorrURL, targetWikilinkName: safeName)
+                }
+            } catch {
+                try? fileManager.removeItem(at: nextURL)
+                throw error
+            }
+        }
+
+        private func performRenameVaultSubfolder(vaultURL: URL, folderRelativePath: String, newFolderName: String) throws {
+            let safeName = try validateSubfolderName(newFolderName)
+            let normalizedFolderPath = normalizeFolderPathSegments(folderRelativePath)
+            guard !normalizedFolderPath.isEmpty else {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 17,
+                    userInfo: [NSLocalizedDescriptionKey: "Indique a pasta a renomear."]
+                )
+            }
+
+            let currentURL = try resolveUnderVault(vaultURL: vaultURL, relativePath: normalizedFolderPath)
+
+            var isDir: ObjCBool = false
+            guard fileManager.fileExists(atPath: currentURL.path, isDirectory: &isDir), isDir.boolValue else {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 18,
+                    userInfo: [NSLocalizedDescriptionKey: "A pasta nao existe."]
+                )
+            }
+
+            if currentURL.standardizedFileURL.path == vaultURL.standardizedFileURL.path {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 19,
+                    userInfo: [NSLocalizedDescriptionKey: "Use Configuracoes para renomear o vault."]
+                )
+            }
+
+            let currentName = currentURL.lastPathComponent
+            if currentName.compare(safeName, options: .caseInsensitive) == .orderedSame {
+                return
+            }
+
+            let parentURL = currentURL.deletingLastPathComponent()
+            let nextURL = parentURL.appendingPathComponent(safeName, isDirectory: true)
+            if fileManager.fileExists(atPath: nextURL.path) {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 20,
+                    userInfo: [NSLocalizedDescriptionKey: "Ja existe uma pasta com este nome."]
+                )
+            }
+
+            try fileManager.moveItem(at: currentURL, to: nextURL)
+        }
+
+        private func createVaultSubfolderFromWeb(_ payload: [String: Any]) {
+            let parentPath = (payload["parentPath"] as? String) ?? ""
+            let folderName = (payload["folderName"] as? String) ?? ""
+
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else { return }
+                guard let vaultURL = self.resolvePersistedVaultURL() else {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.publishFolderMutationResult(
+                            success: false,
+                            errorMessage: "Nenhum vault local selecionado. Abra Configuracoes e escolha a pasta."
+                        )
+                    }
+                    return
+                }
+
+                self.withSecurityScopedAccess(to: vaultURL) {
+                    do {
+                        try self.performCreateVaultSubfolder(
+                            vaultURL: vaultURL,
+                            parentRelativePath: parentPath,
+                            folderName: folderName
+                        )
+                        self.publishVaultSelection(for: vaultURL) { [weak self] in
+                            self?.publishFolderMutationResult(success: true, errorMessage: nil)
+                        }
+                    } catch {
+                        self.publishFolderMutationResult(success: false, errorMessage: error.localizedDescription)
+                    }
+                }
+            }
+        }
+
+        private func renameVaultSubfolderFromWeb(_ payload: [String: Any]) {
+            let folderPath = (payload["folderPath"] as? String) ?? ""
+            let newFolderName = (payload["newFolderName"] as? String) ?? ""
+
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else { return }
+                guard let vaultURL = self.resolvePersistedVaultURL() else {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.publishFolderMutationResult(
+                            success: false,
+                            errorMessage: "Nenhum vault local selecionado. Abra Configuracoes e escolha a pasta."
+                        )
+                    }
+                    return
+                }
+
+                self.withSecurityScopedAccess(to: vaultURL) {
+                    do {
+                        try self.performRenameVaultSubfolder(
+                            vaultURL: vaultURL,
+                            folderRelativePath: folderPath,
+                            newFolderName: newFolderName
+                        )
+                        self.publishVaultSelection(for: vaultURL) { [weak self] in
+                            self?.publishFolderMutationResult(success: true, errorMessage: nil)
+                        }
+                    } catch {
+                        self.publishFolderMutationResult(success: false, errorMessage: error.localizedDescription)
+                    }
+                }
+            }
+        }
+
         private func publishPersistedVaultIfAvailable() {
             guard let persistedURL = resolvePersistedVaultURL() else { return }
 
@@ -1021,12 +1344,12 @@ struct WebView: NSViewRepresentable {
             publishVaultSelection(for: persistedURL)
         }
 
-        private func publishVaultSelection(for rootURL: URL) {
+        private func publishVaultSelection(for rootURL: URL, onJavaScriptEvaluated: (@Sendable () -> Void)? = nil) {
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self else { return }
                 self.withSecurityScopedAccess(to: rootURL) {
                     let payload = self.buildVaultPayload(for: rootURL)
-                    self.publish(payload: payload)
+                    self.publish(payload: payload, onJavaScriptEvaluated: onJavaScriptEvaluated)
                 }
             }
         }
@@ -1098,7 +1421,7 @@ struct WebView: NSViewRepresentable {
             ]
         }
 
-        private func publish(payload: [String: Any]) {
+        private func publish(payload: [String: Any], onJavaScriptEvaluated: (@Sendable () -> Void)? = nil) {
             guard JSONSerialization.isValidJSONObject(payload) else { return }
             guard
                 let jsonData = try? JSONSerialization.data(withJSONObject: payload),
@@ -1118,6 +1441,7 @@ struct WebView: NSViewRepresentable {
                         NSLog("[Brain2 Native] evaluateJavaScript vault payload falhou: \(error.localizedDescription)")
                     }
                     #endif
+                    onJavaScriptEvaluated?()
                 }
             }
         }

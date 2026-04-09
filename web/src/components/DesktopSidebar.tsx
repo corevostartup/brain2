@@ -41,6 +41,8 @@ type FolderContextMenuState = {
   path: string;
   x: number;
   y: number;
+  /** Área vazia da lista: só «Nova pasta» (parent = path). */
+  onlyNovaPasta?: boolean;
 };
 
 type ConversationContextMenuState = {
@@ -397,6 +399,7 @@ export default function DesktopSidebar({
 
   const handleFolderContextMenu = useCallback((event: ReactMouseEvent<HTMLButtonElement>, folder: FolderRow) => {
     event.preventDefault();
+    event.stopPropagation();
     const menuWidth = 170;
     const menuHeight = 116;
     const x = Math.min(event.clientX, Math.max(8, window.innerWidth - menuWidth - 8));
@@ -412,9 +415,46 @@ export default function DesktopSidebar({
     setUserMenuOpen(false);
   }, []);
 
+  const handleFolderTreeEmptyAreaContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLUListElement>) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) {
+        return;
+      }
+      if (
+        target.closest("button") ||
+        target.closest("input") ||
+        target.closest(".list-item--draft") ||
+        target.closest(".vault-loading-row")
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      const menuWidth = 170;
+      const menuHeight = 48;
+      const x = Math.min(event.clientX, Math.max(8, window.innerWidth - menuWidth - 8));
+      const y = Math.min(event.clientY, Math.max(8, window.innerHeight - menuHeight - 8));
+
+      const parentPath = selectedFolderPath ?? "";
+
+      setFolderContextMenu({
+        name: "",
+        path: parentPath,
+        x,
+        y,
+        onlyNovaPasta: true,
+      });
+      setConversationContextMenu(null);
+      setUserMenuOpen(false);
+    },
+    [selectedFolderPath]
+  );
+
   const handleConversationContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>, conversation: VaultConversation) => {
       event.preventDefault();
+      event.stopPropagation();
       const menuWidth = 180;
       const menuHeight = 84;
       const x = Math.min(event.clientX, Math.max(8, window.innerWidth - menuWidth - 8));
@@ -664,7 +704,10 @@ export default function DesktopSidebar({
               <span>Nova pasta</span>
             </button>
           </div>
-          <ul className="item-list folder-tree">
+          <ul
+            className="item-list folder-tree"
+            onContextMenu={handleFolderTreeEmptyAreaContextMenu}
+          >
             {vaultLoading && folderRows.length === 0 && !draftFolderPlacement
               ? (
                 <li className="vault-loading-row" aria-live="polite" aria-busy="true">
@@ -977,7 +1020,11 @@ export default function DesktopSidebar({
             <div
               className="folder-context-menu"
               role="menu"
-              aria-label={`Ações da pasta ${folderContextMenu.name}`}
+              aria-label={
+                folderContextMenu.onlyNovaPasta
+                  ? "Nova pasta na lista de pastas"
+                  : `Ações da pasta ${folderContextMenu.name}`
+              }
               style={{ left: `${folderContextMenu.x}px`, top: `${folderContextMenu.y}px` }}
             >
               <button
@@ -993,33 +1040,37 @@ export default function DesktopSidebar({
                 <FolderPlus size={13} strokeWidth={1.8} />
                 <span>Nova pasta</span>
               </button>
-              <button
-                className="folder-context-item"
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  const targetPath = folderContextMenu.path;
-                  const currentName = folderContextMenu.name;
-                  setFolderContextMenu(null);
-                  openRenameFolderInput(targetPath, currentName);
-                }}
-              >
-                <Pencil size={13} strokeWidth={1.8} />
-                <span>Renomear</span>
-              </button>
-              <button
-                className="folder-context-item folder-context-item--danger"
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  const targetPath = folderContextMenu.path;
-                  setFolderContextMenu(null);
-                  void onDeleteFolder?.(targetPath);
-                }}
-              >
-                <Trash2 size={13} strokeWidth={1.8} />
-                <span>Excluir</span>
-              </button>
+              {!folderContextMenu.onlyNovaPasta && (
+                <>
+                  <button
+                    className="folder-context-item"
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      const targetPath = folderContextMenu.path;
+                      const currentName = folderContextMenu.name;
+                      setFolderContextMenu(null);
+                      openRenameFolderInput(targetPath, currentName);
+                    }}
+                  >
+                    <Pencil size={13} strokeWidth={1.8} />
+                    <span>Renomear</span>
+                  </button>
+                  <button
+                    className="folder-context-item folder-context-item--danger"
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      const targetPath = folderContextMenu.path;
+                      setFolderContextMenu(null);
+                      void onDeleteFolder?.(targetPath);
+                    }}
+                  >
+                    <Trash2 size={13} strokeWidth={1.8} />
+                    <span>Excluir</span>
+                  </button>
+                </>
+              )}
             </div>
           </>
         )}

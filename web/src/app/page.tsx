@@ -104,7 +104,43 @@ type NativeBridge = {
     markdown: string;
     folderPath?: string;
   }) => void;
+  createFolder?: (payload: { parentPath: string; folderName: string }) => void;
+  renameFolder?: (payload: { folderPath: string; newFolderName: string }) => void;
 };
+
+/** Aguarda o resultado da criacao/renomeacao de pastas no shell macOS (sandbox + bookmark). */
+function callNativeFolderMutation(call: () => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeoutMs = 120_000;
+    const timeoutId = window.setTimeout(() => {
+      window.removeEventListener("brain2-native-folder-mutation-result", onResult);
+      window.alert("A operacao demorou demais. Tente novamente.");
+      reject(new Error("brain2-native-folder-mutation-timeout"));
+    }, timeoutMs);
+
+    const onResult = (ev: Event) => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("brain2-native-folder-mutation-result", onResult);
+      const detail = (ev as CustomEvent<{ success?: boolean; error?: string }>).detail;
+      if (detail?.success) {
+        resolve();
+        return;
+      }
+      const msg = detail?.error?.trim() || "Nao foi possivel concluir a operacao.";
+      window.alert(msg);
+      reject(new Error(msg));
+    };
+
+    window.addEventListener("brain2-native-folder-mutation-result", onResult, { once: true });
+    try {
+      call();
+    } catch (error) {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("brain2-native-folder-mutation-result", onResult);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
 
 function isBrain2NativeAppShell(): boolean {
   return isNativeShellBridgeAvailable();
@@ -860,12 +896,8 @@ export default function Home() {
   }, [applyVaultData]);
 
   const handleCreateFolder = useCallback(async (parentPath: string, folderName: string) => {
-    if (hasNativeVaultData || hasCloudVaultData) {
-      window.alert(
-        hasCloudVaultData
-          ? "Nova pasta ainda nao esta disponivel para o vault no Google Drive (somente leitura)."
-          : "Nova pasta via menu lateral ainda nao esta disponivel para o vault nativo."
-      );
+    if (hasCloudVaultData) {
+      window.alert("Nova pasta ainda nao esta disponivel para o vault no Google Drive (somente leitura).");
       return;
     }
 
@@ -876,6 +908,24 @@ export default function Home() {
 
     if (safeFolderName.includes("/") || safeFolderName.includes("\\")) {
       window.alert("O nome da pasta nao pode conter / ou \\\\.");
+      return;
+    }
+
+    if (hasNativeVaultData) {
+      const bridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
+      if (typeof bridge?.createFolder !== "function") {
+        window.alert("Atualize a app Brain2 no Mac para criar pastas no vault local.");
+        return;
+      }
+      try {
+        await callNativeFolderMutation(() =>
+          bridge.createFolder!({ parentPath, folderName: safeFolderName })
+        );
+      } catch {
+        throw new Error("create-folder-failed");
+      }
+      const nextSelectedPath = parentPath ? `${parentPath}/${safeFolderName}` : safeFolderName;
+      setSelectedFolderPath(nextSelectedPath);
       return;
     }
 
@@ -925,12 +975,8 @@ export default function Home() {
   }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData, selectedFolderPath]);
 
   const handleRenameFolder = useCallback(async (folderPath: string, nextFolderNameRaw: string) => {
-    if (hasNativeVaultData || hasCloudVaultData) {
-      window.alert(
-        hasCloudVaultData
-          ? "Renomear pasta ainda nao esta disponivel para o vault no Google Drive (somente leitura)."
-          : "Renomear pasta via menu lateral ainda nao esta disponivel para o vault nativo."
-      );
+    if (hasCloudVaultData) {
+      window.alert("Renomear pasta ainda nao esta disponivel para o vault no Google Drive (somente leitura).");
       return;
     }
 
@@ -948,6 +994,41 @@ export default function Home() {
     const slashIndex = normalizedFolderPath.lastIndexOf("/");
     const parentPrefix = slashIndex >= 0 ? `${normalizedFolderPath.slice(0, slashIndex + 1)}` : "";
     const renamedFolderPath = `${parentPrefix}${nextFolderName}`;
+
+    if (hasNativeVaultData) {
+      const bridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
+      if (typeof bridge?.renameFolder !== "function") {
+        window.alert("Atualize a app Brain2 no Mac para renomear pastas no vault local.");
+        return;
+      }
+      try {
+        await callNativeFolderMutation(() =>
+          bridge.renameFolder!({
+            folderPath: normalizedFolderPath,
+            newFolderName: nextFolderName,
+          })
+        );
+      } catch {
+        throw new Error("rename-folder-failed");
+      }
+
+      setSelectedFolderPath((previous) => {
+        if (!previous) {
+          return previous;
+        }
+
+        if (previous === normalizedFolderPath) {
+          return renamedFolderPath;
+        }
+
+        if (previous.startsWith(`${normalizedFolderPath}/`)) {
+          return `${renamedFolderPath}${previous.slice(normalizedFolderPath.length)}`;
+        }
+
+        return previous;
+      });
+      return;
+    }
 
     const result = await mutatePresetVaultData({
       action: "rename-folder",
