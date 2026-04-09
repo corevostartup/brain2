@@ -824,13 +824,6 @@ export default function BrainGraphView({
         </div>
       ) : useVault && graph ? (
         <>
-          <div className="brain-graph-legend">
-            <span className="legend-item">
-              <span className="legend-dot" style={{ background: VAULT_NODE_COLOR }} />
-              {graph.nodes.length} notas &middot; {graph.edges.length} conexões
-            </span>
-          </div>
-
           <div ref={containerRef} className="brain-graph-container">
             <ForceGraph2D
               ref={fgRef as MutableRefObject<ForceGraphMethods | undefined>}
@@ -878,6 +871,21 @@ export default function BrainGraphView({
         </div>
       )}
 
+      <footer className="brain-graph-footer-stack" role="contentinfo">
+        {!loading && useVault && graph ? (
+          <div className="brain-graph-legend">
+            <span className="legend-item">
+              <span className="legend-dot" style={{ background: VAULT_NODE_COLOR }} />
+              {graph.nodes.length} notas &middot; {graph.edges.length} conexões
+            </span>
+          </div>
+        ) : null}
+        <p className="brain-graph-ancc">
+          Brain2 is powered by an Artificial Neuroplastic Cognitive Correlation model (
+          <span className="brain-graph-ancc-abbr">ANCC</span>)
+        </p>
+      </footer>
+
       <style jsx>{`
         .brain-graph-root {
           position: relative;
@@ -911,12 +919,21 @@ export default function BrainGraphView({
           color: var(--muted-hover);
         }
 
-        .brain-graph-legend {
+        .brain-graph-footer-stack {
           position: absolute;
-          bottom: 16px;
+          bottom: 12px;
           left: 50%;
           transform: translateX(-50%);
           z-index: 20;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 8px;
+          max-width: min(560px, 94vw);
+          pointer-events: none;
+        }
+
+        .brain-graph-legend {
           display: flex;
           align-items: center;
           gap: 16px;
@@ -925,7 +942,26 @@ export default function BrainGraphView({
           background: rgba(20, 20, 20, 0.85);
           border: 1px solid var(--bar-border);
           backdrop-filter: blur(8px);
-          pointer-events: none;
+        }
+
+        .brain-graph-ancc {
+          margin: 0;
+          padding: 0 8px;
+          font-family: "Inter", system-ui, sans-serif;
+          font-size: clamp(8px, 1.1vw, 9.5px);
+          font-weight: 400;
+          font-style: italic;
+          line-height: 1.45;
+          letter-spacing: 0.02em;
+          color: rgba(148, 148, 156, 0.52);
+          text-align: center;
+        }
+
+        .brain-graph-ancc-abbr {
+          font-style: normal;
+          font-weight: 500;
+          letter-spacing: 0.14em;
+          color: rgba(168, 168, 176, 0.62);
         }
 
         .legend-item {

@@ -387,6 +387,9 @@ function normalizeGraph(
   return buildGraphFromConversations(conversations);
 }
 
+/** Tempo minimo da splash; o Firebase pode resolver a sessao em poucos ms. */
+const MIN_AUTH_SPLASH_MS = 2800;
+
 export default function Home() {
   const [isAuthInitializing, setIsAuthInitializing] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -438,12 +441,33 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const splashStartMs = Date.now();
+    let splashHideTimer: ReturnType<typeof setTimeout> | null = null;
+    let splashEndScheduled = false;
+
+    const scheduleSplashEnd = () => {
+      if (splashEndScheduled) {
+        return;
+      }
+      splashEndScheduled = true;
+      const elapsed = Date.now() - splashStartMs;
+      const remaining = Math.max(0, MIN_AUTH_SPLASH_MS - elapsed);
+      splashHideTimer = setTimeout(() => {
+        setIsAuthInitializing(false);
+        splashHideTimer = null;
+      }, remaining);
+    };
+
     const configError = getFirebaseConfigError();
     if (configError) {
       setAuthError(configError);
       setIsAuthenticated(false);
-      setIsAuthInitializing(false);
-      return;
+      scheduleSplashEnd();
+      return () => {
+        if (splashHideTimer) {
+          clearTimeout(splashHideTimer);
+        }
+      };
     }
 
     let unsubscribed = false;
@@ -476,7 +500,7 @@ export default function Home() {
         setAuthUser(user);
         setIsAuthenticated(Boolean(user));
         setAuthError(null);
-        setIsAuthInitializing(false);
+        scheduleSplashEnd();
 
         if (user) {
           void registerOrUpdateUserInFirestore(user).catch((err) => {
@@ -489,6 +513,9 @@ export default function Home() {
     return () => {
       unsubscribed = true;
       unsubscribeAuth?.();
+      if (splashHideTimer) {
+        clearTimeout(splashHideTimer);
+      }
     };
   }, []);
 
