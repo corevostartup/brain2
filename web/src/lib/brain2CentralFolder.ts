@@ -8,6 +8,8 @@
  * API preset (vaultServer): ficheiro opcional na raiz do vault `.brain2-central-folder-name`
  * (uma linha = nome da pasta-central). O wikilink ao hub só é escrito em `Nome/Nome.md` ao criar
  * pastas na raiz do vault (irmãs da pasta-central), não em subpastas.
+ *
+ * `Brain2Memories/Memories.md` é criado quando a pasta existe e recebe o mesmo wikilink ao hub.
  */
 
 export const BRAIN2_CENTRAL_BRAIN_NAME_KEY = "brain2-central-brain-folder-name";

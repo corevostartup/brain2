@@ -186,6 +186,33 @@ async function readPresetCentralBrainFolderName(): Promise<string | null> {
   }
 }
 
+const BRAIN2_MEMORIES_FOLDER = "Brain2Memories";
+const BRAIN2_MEMORIES_NOTE = "Memories.md";
+
+/** Garante `Brain2Memories/Memories.md` com wikilink à pasta-central (ficheiro `.brain2-central-folder-name`). */
+async function ensureBrain2MemoriesMemoriesMarkdownIfNeeded(): Promise<void> {
+  const memoriesDir = path.join(PRESET_VAULT_PATH, BRAIN2_MEMORIES_FOLDER);
+  try {
+    const st = await fs.stat(memoriesDir);
+    if (!st.isDirectory()) {
+      return;
+    }
+  } catch {
+    return;
+  }
+  const memoriesMd = path.join(memoriesDir, BRAIN2_MEMORIES_NOTE);
+  try {
+    await fs.access(memoriesMd);
+  } catch {
+    await fs.writeFile(memoriesMd, "", "utf8");
+  }
+  const central = await readPresetCentralBrainFolderName();
+  if (!central) {
+    return;
+  }
+  await ensureMarkdownCorrelationWikilink(memoriesMd, central);
+}
+
 async function readFolderTreeFromPath(dirPath: string): Promise<FolderTreeNode[]> {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
   const folders: FolderTreeNode[] = [];
@@ -332,6 +359,7 @@ export async function savePresetConversation(
   const targetFolderRelativePath = normalizedFolderPath || "Brain2Memories";
   const targetFolderAbsolutePath = resolvePresetPath(targetFolderRelativePath);
   await fs.mkdir(targetFolderAbsolutePath, { recursive: true });
+  await ensureBrain2MemoriesMemoriesMarkdownIfNeeded();
 
   let markdownToPersist = markdown;
   if (normalizedFolderPath) {

@@ -260,6 +260,8 @@ struct WebView: NSViewRepresentable {
         /// Nome da pasta-central (mesmo nome que `Nome.md` dentro dela), alinhado com a web.
         private static let centralBrainFolderNameDefaultsKey = "brain2-central-brain-folder-name"
         private static let memoriesFolderName = "Brain2Memories"
+        /// Ficheiro de nota dentro de `Brain2Memories` (vincula à pasta-central nos metadados).
+        private static let memoriesNoteFileName = "Memories.md"
         private static let llmModelDefaultsKey = "brain2-llm-model"
         private static let llmApiKeyDefaultsKey = "brain2-llm-api-key"
 
@@ -946,6 +948,36 @@ struct WebView: NSViewRepresentable {
             webView?.evaluateJavaScript(script, completionHandler: nil)
         }
 
+        /// Se a pasta `Brain2Memories` existir, garante `Memories.md` com `- Correlation: [[PastaCentral]]`.
+        private func ensureBrain2MemoriesMemoriesMarkdownIfNeeded(vaultRootURL: URL) throws {
+            let memoriesDir = vaultRootURL.appendingPathComponent(Self.memoriesFolderName, isDirectory: true)
+            var isMemoriesDir: ObjCBool = false
+            guard fileManager.fileExists(atPath: memoriesDir.path, isDirectory: &isMemoriesDir), isMemoriesDir.boolValue else {
+                return
+            }
+
+            let mdURL = memoriesDir.appendingPathComponent(Self.memoriesNoteFileName)
+            var isDir: ObjCBool = false
+            if fileManager.fileExists(atPath: mdURL.path, isDirectory: &isDir) {
+                guard !isDir.boolValue else { return }
+            } else {
+                guard fileManager.createFile(atPath: mdURL.path, contents: Data(), attributes: nil) else {
+                    return
+                }
+            }
+
+            guard
+                let hub = UserDefaults.standard
+                    .string(forKey: Self.centralBrainFolderNameDefaultsKey)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                !hub.isEmpty
+            else {
+                return
+            }
+
+            try ensureMarkdownCorrelationWikilink(fileURL: mdURL, targetWikilinkName: hub)
+        }
+
         private func handleNativeDebugLog(_ payload: [String: Any]) {
             #if DEBUG
             let event = payload["event"] as? String ?? "unknown"
@@ -997,6 +1029,14 @@ struct WebView: NSViewRepresentable {
                             withIntermediateDirectories: true,
                             attributes: nil
                         )
+
+                        do {
+                            try self.ensureBrain2MemoriesMemoriesMarkdownIfNeeded(vaultRootURL: vaultURL)
+                        } catch {
+                            #if DEBUG
+                            NSLog("[Brain2 Native] Brain2Memories/Memories.md: \(error.localizedDescription)")
+                            #endif
+                        }
 
                         let safeConversationID = self.sanitizeFileName(conversationID ?? "chat-\(Int(Date().timeIntervalSince1970))")
                         let formattedTitle = self.formatConversationFileTitle(rawTitle ?? "conversation")

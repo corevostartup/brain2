@@ -21,6 +21,7 @@ import {
   WebDirectoryOnboarding,
   BRAIN2_TESTING_ALWAYS_SHOW_WEB_ONBOARDING,
   readWebDirectoryOnboardingCompleted,
+  WEB_DIRECTORY_ONBOARDING_KEY,
 } from "@/components/WebDirectoryOnboarding";
 import AdvancedVoiceSphereView from "@/components/AdvancedVoiceSphereView";
 import { PanelLeftOpen } from "lucide-react";
@@ -1541,6 +1542,31 @@ export default function Home() {
     }
   }, []);
 
+  const handleForceOnboarding = useCallback(() => {
+    setIsSettingsOpen(false);
+    if (isNativeMacShell) {
+      try {
+        const w = window as Window & {
+          Brain2Native?: { requestDirectoryOnboarding?: () => void };
+        };
+        w.Brain2Native?.requestDirectoryOnboarding?.();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    if (BRAIN2_TESTING_ALWAYS_SHOW_WEB_ONBOARDING) {
+      setWebOnboardingDismissedThisSession(false);
+      return;
+    }
+    try {
+      window.localStorage.removeItem(WEB_DIRECTORY_ONBOARDING_KEY);
+    } catch {
+      /* ignore */
+    }
+    setWebDirectoryOnboardingDone(false);
+  }, [isNativeMacShell]);
+
   if (isAuthInitializing) {
     return <AuthSplashScreen />;
   }
@@ -1725,6 +1751,7 @@ export default function Home() {
             onCloudVaultSaved={() => {
               void loadPresetVaultData({ force: true });
             }}
+            onForceOnboarding={handleForceOnboarding}
           />
         ) : (
           <>

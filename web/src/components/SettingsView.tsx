@@ -29,17 +29,13 @@ type SettingsViewProps = {
   nativeVaultPath?: string;
   /** Chamado apos alterar origem do vault (Drive, iCloud, local) ou guardar pasta na nuvem. */
   onCloudVaultSaved?: () => void;
+  /** Fase de testes: reabre o onboarding (web ou overlay nativo). */
+  onForceOnboarding?: () => void;
 };
 
 type NativeBridge = {
   isAvailable?: boolean;
   pickDirectory?: () => void;
-  renameVault?: (payload: { name: string }) => void;
-};
-
-type NativeRenameResult = {
-  success?: boolean;
-  error?: string;
 };
 
 type ThemeMode = "dark" | "light";
@@ -103,22 +99,13 @@ function parseGoogleDriveFolderId(input: string): string | null {
   return null;
 }
 
-function extractVaultNameFromPath(pathValue: string): string {
-  const normalized = pathValue.trim().replace(/\\/g, "/").replace(/\/+$/, "");
-  if (!normalized) {
-    return "";
-  }
-
-  const parts = normalized.split("/");
-  return parts[parts.length - 1] ?? "";
-}
-
 export default function SettingsView({
   onClose,
   onVaultChange,
   vaultHandle,
   nativeVaultPath,
   onCloudVaultSaved,
+  onForceOnboarding,
 }: SettingsViewProps) {
   const [vaultPath, setVaultPath] = useState<string>(() => (
     typeof window === "undefined" ? "" : (loadVaultPath() ?? "")
@@ -138,12 +125,8 @@ export default function SettingsView({
   const [googleDriveSearch, setGoogleDriveSearch] = useState("");
   const [googleDrivePickerError, setGoogleDrivePickerError] = useState("");
   const [googleDriveSelectedFolderId, setGoogleDriveSelectedFolderId] = useState<string | null>(null);
-  const [vaultRenameName, setVaultRenameName] = useState("");
-  const [vaultRenameStatus, setVaultRenameStatus] = useState<"idle" | "renaming" | "saved" | "error">("idle");
-  const [vaultRenameError, setVaultRenameError] = useState("");
   const pendingHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
   const displayedVaultPath = nativeVaultPath?.trim() || (vaultHandle ? vaultHandle.name : vaultPath);
-  const hasVaultSelection = Boolean(displayedVaultPath.trim());
 
   useEffect(() => {
     pendingHandleRef.current = vaultHandle;
@@ -203,43 +186,6 @@ export default function SettingsView({
     setGoogleDriveSelectedFolderId(null);
   }, [vaultStorageMode]);
 
-  useEffect(() => {
-    if (!hasVaultSelection) {
-      setVaultRenameName("");
-      setVaultRenameStatus("idle");
-      setVaultRenameError("");
-      return;
-    }
-
-    setVaultRenameName(extractVaultNameFromPath(displayedVaultPath));
-    setVaultRenameStatus("idle");
-    setVaultRenameError("");
-  }, [displayedVaultPath, hasVaultSelection]);
-
-  useEffect(() => {
-    if (!nativePickerAvailable) return;
-
-    const handleNativeRenameResult = (event: Event) => {
-      const customEvent = event as CustomEvent<NativeRenameResult>;
-      const detail = customEvent.detail;
-
-      if (detail?.success) {
-        setVaultRenameStatus("saved");
-        setVaultRenameError("");
-        setTimeout(() => setVaultRenameStatus("idle"), 2000);
-        return;
-      }
-
-      setVaultRenameStatus("error");
-      setVaultRenameError(detail?.error || "Nao foi possivel renomear o vault.");
-    };
-
-    window.addEventListener("brain2-native-vault-rename-result", handleNativeRenameResult);
-    return () => {
-      window.removeEventListener("brain2-native-vault-rename-result", handleNativeRenameResult);
-    };
-  }, [nativePickerAvailable]);
-
   const handleThemeChange = (nextTheme: ThemeMode) => {
     setTheme(nextTheme);
     if (typeof window === "undefined") {
@@ -288,14 +234,6 @@ export default function SettingsView({
     setPasteSaved(false);
   };
 
-  const handleVaultRenameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setVaultRenameName(e.target.value);
-    if (vaultRenameStatus !== "idle") {
-      setVaultRenameStatus("idle");
-      setVaultRenameError("");
-    }
-  };
-
   const handlePasteSave = async () => {
     if (!vaultPath.trim()) return;
     const handleToSave = pendingHandleRef.current ?? vaultHandle;
@@ -327,79 +265,6 @@ export default function SettingsView({
 
   const localDirectoryInputReadOnly =
     nativePickerAvailable || Boolean(vaultHandle) || pasteSaved;
-
-  const handleVaultRename = async () => {
-    if (!hasVaultSelection) {
-      setVaultRenameStatus("error");
-      setVaultRenameError("Selecione um vault antes de renomear.");
-      return;
-    }
-
-    const nextVaultName = vaultRenameName.trim();
-    if (!nextVaultName) {
-      setVaultRenameStatus("error");
-      setVaultRenameError("Digite um nome para o vault.");
-      return;
-    }
-
-    if (nextVaultName === "." || nextVaultName === ".." || nextVaultName.includes("/") || nextVaultName.includes("\\")) {
-      setVaultRenameStatus("error");
-      setVaultRenameError("O nome do vault nao pode conter / ou \\\\.");
-      return;
-    }
-
-    const currentVaultName = extractVaultNameFromPath(displayedVaultPath);
-    if (currentVaultName && currentVaultName === nextVaultName) {
-      setVaultRenameStatus("saved");
-      setVaultRenameError("");
-      setTimeout(() => setVaultRenameStatus("idle"), 1200);
-      return;
-    }
-
-    const nativeBridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
-    if (nativePickerAvailable) {
-      if (!nativeBridge?.renameVault) {
-        setVaultRenameStatus("error");
-        setVaultRenameError("Renomeacao nativa indisponivel nesta versao do app.");
-        return;
-      }
-
-      setVaultRenameStatus("renaming");
-      setVaultRenameError("");
-      nativeBridge.renameVault({ name: nextVaultName });
-      return;
-    }
-
-    setVaultRenameStatus("renaming");
-    setVaultRenameError("");
-
-    try {
-      const response = await fetch("/api/vault", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          action: "rename-vault",
-          vaultName: nextVaultName,
-        }),
-      });
-
-      const data = (await response.json()) as { error?: string };
-      if (!response.ok) {
-        throw new Error(data.error || "Falha ao renomear o vault.");
-      }
-
-      setVaultRenameStatus("saved");
-      setVaultRenameError("");
-      onVaultChange(pendingHandleRef.current ?? vaultHandle ?? null);
-      setTimeout(() => setVaultRenameStatus("idle"), 2000);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Falha inesperada ao renomear o vault.";
-      setVaultRenameStatus("error");
-      setVaultRenameError(message);
-    }
-  };
 
   const handleVaultStorageModeChange = (mode: VaultStorageMode) => {
     setVaultStorageMode(mode);
@@ -667,38 +532,6 @@ export default function SettingsView({
                   </p>
                 )}
               </div>
-
-              <div className="vault-rename-box">
-                <p className="vault-rename-title">Nome do Vault</p>
-                <div className="vault-rename-row">
-                  <input
-                    className="vault-rename-input"
-                    type="text"
-                    value={vaultRenameName}
-                    onChange={handleVaultRenameChange}
-                    placeholder="Novo nome da pasta do vault"
-                    spellCheck={false}
-                    disabled={!hasVaultSelection || vaultRenameStatus === "renaming"}
-                  />
-                  <button
-                    className="vault-rename-btn"
-                    type="button"
-                    onClick={() => { void handleVaultRename(); }}
-                    disabled={!hasVaultSelection || !vaultRenameName.trim() || vaultRenameStatus === "renaming"}
-                  >
-                    {vaultRenameStatus === "renaming" ? "Renomeando..." : "Renomear"}
-                  </button>
-                </div>
-                {!hasVaultSelection ? (
-                  <p className="vault-hint">Selecione um vault para habilitar a renomeacao.</p>
-                ) : vaultRenameStatus === "saved" ? (
-                  <p className="vault-success-hint">Nome do vault atualizado com sucesso.</p>
-                ) : vaultRenameStatus === "error" ? (
-                  <p className="vault-error-hint">{vaultRenameError}</p>
-                ) : (
-                  <p className="vault-hint">A alteracao atualiza o nome da pasta raiz do vault.</p>
-                )}
-              </div>
             </>
           )}
 
@@ -893,6 +726,24 @@ export default function SettingsView({
             </button>
           </div>
         </section>
+
+        {onForceOnboarding && (
+          <section className="settings-section appearance-section">
+            <h3>Testes</h3>
+            <p className="settings-description">
+              Durante a fase de testes, pode rever o fluxo inicial de diretório e pasta-central.
+            </p>
+            <button
+              type="button"
+              className="force-onboarding-btn"
+              onClick={() => {
+                onForceOnboarding();
+              }}
+            >
+              Forçar Overboarding
+            </button>
+          </section>
+        )}
       </div>
 
       <style jsx>{`
@@ -1321,21 +1172,39 @@ export default function SettingsView({
           color: var(--foreground);
         }
 
+        .force-onboarding-btn {
+          align-self: flex-start;
+          height: 38px;
+          padding: 0 16px;
+          border: 1px solid var(--bar-border);
+          border-radius: 10px;
+          background: rgba(255, 255, 255, 0.04);
+          color: var(--foreground);
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: background 0.15s ease, border-color 0.15s ease;
+        }
+
+        .force-onboarding-btn:hover {
+          background: var(--pill-active);
+          border-color: var(--bar-border-hover);
+        }
+
         @media (max-width: 560px) {
           .vault-source-grid,
           .theme-mode-grid {
             grid-template-columns: 1fr;
           }
 
-          .cloud-directory-row,
-          .vault-rename-row {
+          .cloud-directory-row {
             flex-direction: column;
             align-items: stretch;
           }
 
           .cloud-directory-pick-btn,
           .cloud-directory-save-btn,
-          .vault-rename-btn,
           .drive-picker-refresh-btn,
           .drive-picker-cancel-btn,
           .drive-picker-confirm-btn {
@@ -1417,72 +1286,6 @@ export default function SettingsView({
           border-radius: 4px;
           font-size: 10px;
           color: #555;
-        }
-
-        .vault-rename-box {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-          padding: 12px;
-          border: 1px solid var(--bar-border);
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.02);
-        }
-
-        .vault-rename-title {
-          margin: 0;
-          font-family: 'Inter', sans-serif;
-          font-size: 11px;
-          font-weight: 600;
-          letter-spacing: 0.03em;
-          color: var(--foreground);
-          text-transform: uppercase;
-        }
-
-        .vault-rename-row {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        .vault-rename-input {
-          flex: 1;
-          height: 36px;
-          border: 1px solid var(--bar-border);
-          border-radius: 9px;
-          background: rgba(255, 255, 255, 0.03);
-          color: var(--foreground);
-          font-family: 'Inter', sans-serif;
-          font-size: 12px;
-          padding: 0 10px;
-          min-width: 0;
-        }
-
-        .vault-rename-input:disabled {
-          opacity: 0.5;
-        }
-
-        .vault-rename-btn {
-          height: 36px;
-          padding: 0 14px;
-          border: 1px solid var(--bar-border);
-          border-radius: 9px;
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--foreground);
-          font-family: 'Inter', sans-serif;
-          font-size: 12px;
-          font-weight: 500;
-          white-space: nowrap;
-          transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
-        }
-
-        .vault-rename-btn:hover:not(:disabled) {
-          background: var(--pill-active);
-          border-color: var(--bar-border-hover);
-        }
-
-        .vault-rename-btn:disabled {
-          opacity: 0.45;
         }
 
         .vault-success-hint {
