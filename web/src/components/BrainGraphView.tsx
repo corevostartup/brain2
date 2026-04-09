@@ -30,10 +30,13 @@ const PHYSICS = {
   chargeStrength: -320,
   nativeChargeStrength: -560,
   velocityDecay: 0.28,
+  /** Passo 1+4: atrito moderado — suave sem ficar eternamente em oscilação. */
+  nativeVelocityDecay: 0.5,
   alphaDecay: 0.011,
   alphaMin: 0.006,
-  nativeAlphaDecay: 0.004,
-  nativeAlphaMin: 0.0015,
+  /** Passo 4: alpha um pouco mais lento para movimentos mais suaves. */
+  nativeAlphaDecay: 0.015,
+  nativeAlphaMin: 0.001,
   baseLinkDistance: 92,
   degreeDistanceBoost: 20,
   degreeMismatchBoost: 3,
@@ -41,12 +44,16 @@ const PHYSICS = {
   linkStrengthMax: 0.95,
   warmupTicks: 140,
   cooldownMs: 22000,
-  nativeCooldownMs: 120000,
+  /** Menos tempo de “motor ligado” = menos agitação contínua (antes 120s era excessivo). */
+  nativeCooldownMs: 14000,
   /** Ancora o conjunto no centro do espaço do grafo (0,0); o utilizador continua a poder pan/zoom na vista. */
   centerStrength: 0.35,
-  nativeCenterStrength: 0.08,
+  /** Passo 2: mais forte no nativo para o grupo não “cair” da vista. */
+  nativeCenterStrength: 0.26,
   pullToOriginStrength: 0.045,
-  nativePullToOriginStrength: 0.012,
+  nativePullToOriginStrength: 0.072,
+  /** Passo 4: molas um pouco mais “moles” (multiplicador na força link). */
+  nativeLinkStrengthScale: 0.82,
 };
 
 // ── Mock data ─────────────────────────────────────────────────────────
@@ -161,6 +168,23 @@ const GROUP_COLORS_DIM: Record<string, string> = {
 const VAULT_NODE_COLOR = "#b8b8b8";
 const VAULT_NODE_COLOR_DIM = "#4a4a4a";
 
+/** Passo 6: destaque ao arrastar — azul tech. */
+const TECH_DRAG_NODE = "#22d3ee";
+const TECH_DRAG_LINK = "rgba(34, 211, 238, 0.78)";
+
+function rgbFromHex(hex: string): { r: number; g: number; b: number } | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function withAlpha(hex: string, alpha: number): string {
+  const rgb = rgbFromHex(hex);
+  if (!rgb) return hex;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+}
+
 type BrainGraphViewProps = {
   onClose: () => void;
   graph?: VaultGraph | null;
@@ -235,6 +259,9 @@ export default function BrainGraphView({
   const dragAccumRef = useRef(0);
   const suppressClickUntil = useRef(0);
   const nativeSpreadRecoveryRef = useRef(false);
+  const hoverIdRef = useRef<string | null>(null);
+  const dragSessionRef = useRef<string | null>(null);
+  const [dragRootId, setDragRootId] = useState<string | null>(null);
   const isNativeShell =
     typeof document !== "undefined" &&
     document.documentElement.hasAttribute("data-brain2-native");
@@ -280,6 +307,14 @@ export default function BrainGraphView({
     return m;
   }, [activeEdges]);
 
+  const dragEgoSet = useMemo(() => {
+    if (!dragRootId) return null as Set<string> | null;
+    const s = new Set<string>([dragRootId]);
+    const neigh = adjacency.get(dragRootId);
+    if (neigh) neigh.forEach((id) => s.add(id));
+    return s;
+  }, [dragRootId, adjacency]);
+
   const graphData = useMemo((): GraphData<BrainNode, BrainLink> => {
     const baseRadius = Math.max(180, Math.min(dims.w, dims.h) * 0.34);
     const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // phyllotaxis
@@ -288,7 +323,7 @@ export default function BrainGraphView({
       const t = (index + 1) / Math.max(1, activeNodes.length);
       const r = Math.sqrt(t) * baseRadius;
       const a = index * goldenAngle;
-      const nativeKick = isNativeShell && useVault ? 0.75 : 0.18;
+      const nativeKick = isNativeShell && useVault ? 0.03 : 0.12;
       return {
         id: n.id,
         name: n.label,
@@ -417,7 +452,11 @@ export default function BrainGraphView({
 
       if (linkForce && typeof linkForce.distance === "function") {
         linkForce.distance((l) => Number(l.distance));
-        linkForce.strength?.((l) => Number(l.strength));
+        const scale =
+          isNativeShell && useVault ? PHYSICS.nativeLinkStrengthScale : 1;
+        linkForce.strength?.((l) => Number(l.strength) * scale);
+        const lf = linkForce as unknown as { iterations?: (n: number) => void };
+        lf.iterations?.(isNativeShell && useVault ? 2 : 1);
       }
 
       const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void };
@@ -454,18 +493,6 @@ export default function BrainGraphView({
   useEffect(() => {
     nativeSpreadRecoveryRef.current = false;
   }, [graphKey]);
-
-  useEffect(() => {
-    if (!isNativeShell || !useVault) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      fgRef.current?.d3ReheatSimulation();
-    }, 2400);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [graphKey, isNativeShell, useVault]);
 
   useEffect(() => {
     if (!isNativeShell || !useVault || loading) {
@@ -632,16 +659,24 @@ export default function BrainGraphView({
 
   const nodeColor = useCallback(
     (node: NodeObject<BrainNode>) => {
+      const id = String(node.id);
       const isVault = node.group === "vault";
       const base = isVault ? VAULT_NODE_COLOR : GROUP_COLORS[node.group] || "#b0b0b0";
+
+      if (dragRootId && dragEgoSet) {
+        if (!dragEgoSet.has(id)) return withAlpha(base, 0.8);
+        if (id === dragRootId) return TECH_DRAG_NODE;
+        return base;
+      }
+
       if (isNativeShell) {
         return base;
       }
       if (!highlightSet) return base;
-      if (highlightSet.has(String(node.id))) return base;
+      if (highlightSet.has(id)) return base;
       return isVault ? VAULT_NODE_COLOR_DIM : GROUP_COLORS_DIM[node.group] || "#484848";
     },
-    [highlightSet, isNativeShell]
+    [highlightSet, isNativeShell, dragRootId, dragEgoSet]
   );
 
   const linkColor = useCallback(
@@ -650,27 +685,42 @@ export default function BrainGraphView({
       const b = nodeIdOf(link.target);
       const k = linkKey(a, b);
       const base = "rgba(255,255,255,0.14)";
+      const baseDim = "rgba(255,255,255,0.112)";
       const hi = "rgba(255,255,255,0.38)";
       const faded = "rgba(255,255,255,0.045)";
+
+      if (dragRootId && dragEgoSet) {
+        const bothInEgo = dragEgoSet.has(a) && dragEgoSet.has(b);
+        if (!bothInEgo) return baseDim;
+        if (a === dragRootId || b === dragRootId) return TECH_DRAG_LINK;
+        return base;
+      }
+
       if (isNativeShell) {
         return base;
       }
       if (highlightLinks.size === 0) return base;
       return highlightLinks.has(k) ? hi : faded;
     },
-    [highlightLinks, isNativeShell]
+    [highlightLinks, isNativeShell, dragRootId, dragEgoSet]
   );
 
   const linkWidth = useCallback(
     (link: LinkObject<BrainNode, BrainLink>) => {
       const a = nodeIdOf(link.source);
       const b = nodeIdOf(link.target);
+      if (dragRootId && dragEgoSet) {
+        const bothInEgo = dragEgoSet.has(a) && dragEgoSet.has(b);
+        if (!bothInEgo) return 0.55;
+        if (a === dragRootId || b === dragRootId) return 1.15;
+        return 0.85;
+      }
       if (isNativeShell) {
         return 0.9;
       }
       return highlightLinks.has(linkKey(a, b)) ? 1.25 : 0.65;
     },
-    [highlightLinks, isNativeShell]
+    [highlightLinks, isNativeShell, dragRootId, dragEgoSet]
   );
 
   const nodeCanvasObjectMode = useCallback(() => "after" as const, []);
@@ -688,7 +738,21 @@ export default function BrainGraphView({
 
       const id = String(node.id);
       let fill: string;
-      if (isNativeShell) {
+      if (dragRootId && dragEgoSet) {
+        if (!dragEgoSet.has(id)) {
+          fill = isNativeShell ? "rgba(220, 220, 220, 0.77)" : "rgba(115, 115, 115, 0.58)";
+        } else if (id === dragRootId) {
+          fill = "rgba(34, 211, 238, 0.96)";
+        } else if (isNativeShell) {
+          fill = "rgba(220, 220, 220, 0.96)";
+        } else if (!highlightSet) {
+          fill = "rgba(200, 200, 200, 0.94)";
+        } else if (highlightSet.has(id)) {
+          fill = "rgba(240, 240, 240, 0.98)";
+        } else {
+          fill = "rgba(115, 115, 115, 0.72)";
+        }
+      } else if (isNativeShell) {
         fill = "rgba(220, 220, 220, 0.96)";
       } else if (!highlightSet) {
         fill = "rgba(200, 200, 200, 0.94)";
@@ -705,12 +769,14 @@ export default function BrainGraphView({
       const y = node.y ?? 0;
       ctx.fillText(truncated, x, y + r + pad);
     },
-    [highlightSet, isNativeShell]
+    [highlightSet, isNativeShell, dragRootId, dragEgoSet]
   );
 
   const onNodeHover = useCallback(
     (node: NodeObject<BrainNode> | null) => {
       const id = node?.id != null ? String(node.id) : null;
+      hoverIdRef.current = id;
+      if (dragSessionRef.current) return;
       setHoverId(id);
       updateLinkHighlight(id);
     },
@@ -723,6 +789,7 @@ export default function BrainGraphView({
       if (!onOpenConversationFromNode) return;
       if (isNativeShell) {
         const id = String(node.id);
+        hoverIdRef.current = id;
         setHoverId(id);
         updateLinkHighlight(id);
         emitNativeDebug("brain-node-click-native", {
@@ -743,19 +810,33 @@ export default function BrainGraphView({
   );
 
   const onNodeDrag = useCallback(
-    (_node: NodeObject<BrainNode>, translate: { x: number; y: number }) => {
+    (node: NodeObject<BrainNode>, translate: { x: number; y: number }) => {
+      const id = String(node.id);
+      if (!dragSessionRef.current) {
+        dragSessionRef.current = id;
+        setDragRootId(id);
+        updateLinkHighlight(id);
+      }
       dragAccumRef.current += Math.hypot(translate.x, translate.y);
     },
-    []
+    [updateLinkHighlight]
   );
 
-  const onNodeDragEnd = useCallback((_node: NodeObject<BrainNode>, _translate: { x: number; y: number }) => {
-    if (dragAccumRef.current > 3) {
-      suppressClickUntil.current = performance.now() + 240;
-    }
-    dragAccumRef.current = 0;
-    fgRef.current?.d3ReheatSimulation();
-  }, []);
+  const onNodeDragEnd = useCallback(
+    (_node: NodeObject<BrainNode>, _translate: { x: number; y: number }) => {
+      if (dragAccumRef.current > 3) {
+        suppressClickUntil.current = performance.now() + 240;
+      }
+      dragAccumRef.current = 0;
+      dragSessionRef.current = null;
+      setDragRootId(null);
+      const h = hoverIdRef.current;
+      updateLinkHighlight(h);
+
+      fgRef.current?.d3ReheatSimulation();
+    },
+    [updateLinkHighlight]
+  );
 
   const onEngineStop = useCallback(() => {
     if (dims.w < 48 || dims.h < 48) return;
@@ -764,16 +845,14 @@ export default function BrainGraphView({
     fitDoneKey.current = fitKey;
     emitNativeDebug("brain-engine-stop", { graphKey, fitKey, dimsW: dims.w, dimsH: dims.h });
     fgRef.current?.zoomToFit(480, 36);
-    if (isNativeShell && useVault) {
-      window.setTimeout(() => fgRef.current?.d3ReheatSimulation(), 140);
-    }
-  }, [graphKey, dims.w, dims.h, isNativeShell, useVault]);
+  }, [graphKey, dims.w, dims.h]);
 
   const onBackgroundClick = useCallback((_event: MouseEvent) => {
+    hoverIdRef.current = null;
     setHoverId(null);
     setHighlightLinks(new Set());
     emitNativeDebug("brain-background-click", { graphKey });
-  }, []);
+  }, [graphKey]);
 
   return (
     <div className="brain-graph-root">
@@ -825,7 +904,8 @@ export default function BrainGraphView({
               graphData={graphData}
               backgroundColor="rgba(0,0,0,0)"
               nodeId="id"
-              nodeLabel="name"
+              nodeLabel={() => ""}
+              linkLabel={() => ""}
               nodeVal="val"
               nodeRelSize={NODE_REL_SIZE}
               nodeCanvasObjectMode={nodeCanvasObjectMode}
@@ -835,12 +915,13 @@ export default function BrainGraphView({
               linkColor={linkColor}
               linkWidth={linkWidth}
               linkDirectionalParticles={0}
-              d3VelocityDecay={PHYSICS.velocityDecay}
+              d3VelocityDecay={
+                isNativeShell && useVault ? PHYSICS.nativeVelocityDecay : PHYSICS.velocityDecay
+              }
               d3AlphaDecay={isNativeShell && useVault ? PHYSICS.nativeAlphaDecay : PHYSICS.alphaDecay}
               d3AlphaMin={isNativeShell && useVault ? PHYSICS.nativeAlphaMin : PHYSICS.alphaMin}
               warmupTicks={PHYSICS.warmupTicks}
               cooldownTime={isNativeShell && useVault ? PHYSICS.nativeCooldownMs : PHYSICS.cooldownMs}
-              cooldownTicks={isNativeShell && useVault ? 120000 : undefined}
               enableNodeDrag
               enableZoomInteraction
               enablePanInteraction
