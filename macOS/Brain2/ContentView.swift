@@ -1265,6 +1265,24 @@ struct WebView: NSViewRepresentable {
             }
 
             try fileManager.moveItem(at: currentURL, to: nextURL)
+
+            // Regra do vault: `NomeDaPasta/NomeDaPasta.md` acompanha o nome da pasta.
+            let oldCorrelationURL = nextURL.appendingPathComponent("\(currentName).md")
+            let newCorrelationURL = nextURL.appendingPathComponent("\(safeName).md")
+            if oldCorrelationURL.standardizedFileURL.path != newCorrelationURL.standardizedFileURL.path {
+                var isCorrelationFile: ObjCBool = false
+                if fileManager.fileExists(atPath: oldCorrelationURL.path, isDirectory: &isCorrelationFile),
+                   !isCorrelationFile.boolValue {
+                    if fileManager.fileExists(atPath: newCorrelationURL.path) {
+                        throw NSError(
+                            domain: "Brain2Native",
+                            code: 21,
+                            userInfo: [NSLocalizedDescriptionKey: "Ja existe um ficheiro com o nome da nova pasta dentro da pasta."]
+                        )
+                    }
+                    try fileManager.moveItem(at: oldCorrelationURL, to: newCorrelationURL)
+                }
+            }
         }
 
         private func createVaultSubfolderFromWeb(_ payload: [String: Any]) {

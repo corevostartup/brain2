@@ -478,6 +478,43 @@ export async function renamePresetFolder(
   }
 
   await fs.rename(currentAbsolutePath, nextAbsolutePath);
+
+  // Regra do vault: `NomeDaPasta/NomeDaPasta.md` acompanha o nome da pasta.
+  const oldFolderName = path.basename(normalizedFolderPath);
+  const correlationOld = path.join(nextAbsolutePath, `${oldFolderName}.md`);
+  const correlationNew = path.join(nextAbsolutePath, `${safeFolderName}.md`);
+  if (correlationOld === correlationNew) {
+    return;
+  }
+
+  let correlationStats: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    correlationStats = await fs.stat(correlationOld);
+  } catch (error) {
+    const errno = error as { code?: string };
+    if (errno.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+
+  if (!correlationStats.isFile()) {
+    return;
+  }
+
+  try {
+    await fs.access(correlationNew);
+    throw new Error(
+      "Ja existe um ficheiro com o nome da nova pasta dentro da pasta."
+    );
+  } catch (error) {
+    const errno = error as { code?: string };
+    if (errno.code === "ENOENT") {
+      await fs.rename(correlationOld, correlationNew);
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function renamePresetConversation(
