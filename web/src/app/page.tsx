@@ -19,6 +19,7 @@ import LoginView from "@/components/LoginView";
 import AuthSplashScreen from "@/components/AuthSplashScreen";
 import {
   WebDirectoryOnboarding,
+  BRAIN2_TESTING_ALWAYS_SHOW_WEB_ONBOARDING,
   readWebDirectoryOnboardingCompleted,
 } from "@/components/WebDirectoryOnboarding";
 import AdvancedVoiceSphereView from "@/components/AdvancedVoiceSphereView";
@@ -464,10 +465,18 @@ export default function Home() {
   );
   /** null = ainda não leu localStorage (evita flash no SSR); só browser — no shell Mac o onboarding é nativo Swift. */
   const [webDirectoryOnboardingDone, setWebDirectoryOnboardingDone] = useState<boolean | null>(null);
+  /** Na fase de testes (sempre mostrar), fecha só nesta sessão até novo login. */
+  const [webOnboardingDismissedThisSession, setWebOnboardingDismissedThisSession] = useState(false);
 
   useEffect(() => {
     setWebDirectoryOnboardingDone(readWebDirectoryOnboardingCompleted());
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setWebOnboardingDismissedThisSession(false);
+    }
+  }, [isAuthenticated]);
 
   useEffect(() => {
     const syncNativeShell = () => setIsNativeMacShell(isBrain2NativeAppShell());
@@ -1530,7 +1539,11 @@ export default function Home() {
   const shellHeight = isNativeMacShell ? "100%" : "100dvh";
 
   const showWebDirectoryOnboarding =
-    webDirectoryOnboardingDone === false && !isNativeMacShell && isAuthenticated;
+    isAuthenticated &&
+    !isNativeMacShell &&
+    (BRAIN2_TESTING_ALWAYS_SHOW_WEB_ONBOARDING
+      ? !webOnboardingDismissedThisSession
+      : webDirectoryOnboardingDone === false);
 
   return (
     <main
@@ -1552,7 +1565,11 @@ export default function Home() {
       {showWebDirectoryOnboarding && (
         <WebDirectoryOnboarding
           onCompleted={() => {
-            setWebDirectoryOnboardingDone(true);
+            if (BRAIN2_TESTING_ALWAYS_SHOW_WEB_ONBOARDING) {
+              setWebOnboardingDismissedThisSession(true);
+            } else {
+              setWebDirectoryOnboardingDone(true);
+            }
           }}
         />
       )}

@@ -4,6 +4,9 @@ import { useCallback, useState } from "react";
 
 export const WEB_DIRECTORY_ONBOARDING_KEY = "brain2-web-directory-onboarding-completed";
 
+/** Fase de testes: sempre mostrar onboarding após login (ignora localStorage). Desligar antes do lançamento. */
+export const BRAIN2_TESTING_ALWAYS_SHOW_WEB_ONBOARDING = true;
+
 type Step = "directory" | "brain";
 
 type WebDirectoryOnboardingProps = {
@@ -18,10 +21,12 @@ export function WebDirectoryOnboarding({ onCompleted }: WebDirectoryOnboardingPr
   const [displayName, setDisplayName] = useState("");
 
   const persistAndClose = useCallback(() => {
-    try {
-      localStorage.setItem(WEB_DIRECTORY_ONBOARDING_KEY, "1");
-    } catch {
-      /* ignore */
+    if (!BRAIN2_TESTING_ALWAYS_SHOW_WEB_ONBOARDING) {
+      try {
+        localStorage.setItem(WEB_DIRECTORY_ONBOARDING_KEY, "1");
+      } catch {
+        /* ignore */
+      }
     }
     onCompleted();
   }, [onCompleted]);

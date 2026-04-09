@@ -33,7 +33,10 @@ final class DirectoryOnboardingModel: ObservableObject {
     var pickLocalHandler: (() -> Void)?
 
     var hasCompletedOnboarding: Bool {
-        UserDefaults.standard.bool(forKey: Self.userDefaultsKey)
+        if Brain2OnboardingTesting.alwaysShowAfterLoginPhase {
+            return false
+        }
+        return UserDefaults.standard.bool(forKey: Self.userDefaultsKey)
     }
 
     private var hasPersistedVaultBookmark: Bool {
@@ -56,7 +59,9 @@ final class DirectoryOnboardingModel: ObservableObject {
     }
 
     func markCompletedAndDismiss() {
-        UserDefaults.standard.set(true, forKey: Self.userDefaultsKey)
+        if !Brain2OnboardingTesting.alwaysShowAfterLoginPhase {
+            UserDefaults.standard.set(true, forKey: Self.userDefaultsKey)
+        }
         isPresented = false
         step = .chooseDirectory
     }
@@ -76,21 +81,27 @@ struct ContentView: View {
                 directoryOnboarding: directoryOnboarding
             )
             .padding(.top, 34)
+            /// WKWebView compõe por cima de vistas SwiftUI no mesmo ZStack; esconder o conteúdo web garante que o overlay fique visível.
+            .opacity(directoryOnboarding.isPresented ? 0 : 1)
+            .animation(.easeOut(duration: 0.15), value: directoryOnboarding.isPresented)
 
             // Faixa arrastavel no topo para mover a janela sem barra de titulo nativa.
             WindowDragRegion()
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
                 .allowsHitTesting(!directoryOnboarding.isPresented)
+                .opacity(directoryOnboarding.isPresented ? 0 : 1)
 
             /// Overlay em ecrã completo (evita `.sheet` no macOS que por vezes não aparece por cima do WKWebView).
             if directoryOnboarding.isPresented {
                 DirectoryOnboardingOverlay(model: directoryOnboarding, dimBackground: true)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(appChromeBackground)
                     .zIndex(1_000_000)
                     .transition(.opacity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
         .background(appChromeBackground)
         .background(WindowChromeConfigurator())
@@ -263,11 +274,13 @@ struct WebView: NSViewRepresentable {
         private func scheduleMacOnboardingUnconditionalFallbackIfNeeded() {
             guard !didScheduleMacOnboardingUnconditionalFallback else { return }
             didScheduleMacOnboardingUnconditionalFallback = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 9.0) { [weak self] in
+            /// Fase de testes: aparece cedo; caso contrário mantém o atraso para não cobrir a tela de login.
+            let delay: TimeInterval = Brain2OnboardingTesting.alwaysShowAfterLoginPhase ? 2.5 : 9.0
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, let onboarding = self.directoryOnboarding else { return }
                 guard !onboarding.hasCompletedOnboarding else { return }
                 #if DEBUG
-                NSLog("[Brain2 Onboarding] fallback incondicional: a apresentar folha (web pode não ter chamado a bridge).")
+                NSLog("[Brain2 Onboarding] fallback: a apresentar overlay (delay %.1fs).", delay)
                 #endif
                 onboarding.requestPresentationAfterFirstSuccessfulLogin()
             }
