@@ -1646,6 +1646,10 @@ struct WebView: NSViewRepresentable {
             try fileManager.createDirectory(at: nextURL, withIntermediateDirectories: false, attributes: nil)
 
             let bootstrapURL = nextURL.appendingPathComponent("\(safeName).md")
+            let centralHubName = UserDefaults.standard
+                .string(forKey: Self.centralBrainFolderNameDefaultsKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
             do {
                 guard fileManager.createFile(atPath: bootstrapURL.path, contents: Data(), attributes: nil) else {
                     throw NSError(
@@ -1655,11 +1659,16 @@ struct WebView: NSViewRepresentable {
                     )
                 }
 
+                /// Irmãs no vault: cada `Nome/Nome.md` liga à pasta-central no cabeçalho (`- Correlation: [[PastaCentral]]`, estilo Obsidian).
                 if !normalizedParentPath.isEmpty {
                     let parentFolderName = (normalizedParentPath as NSString).lastPathComponent
                     try ensureMarkdownCorrelationWikilink(fileURL: bootstrapURL, targetWikilinkName: parentFolderName)
                     let parentCorrURL = parentURL.appendingPathComponent("\(parentFolderName).md")
                     try ensureMarkdownCorrelationWikilink(fileURL: parentCorrURL, targetWikilinkName: safeName)
+                }
+
+                if let hub = centralHubName, !hub.isEmpty, safeName.caseInsensitiveCompare(hub) != .orderedSame {
+                    try ensureMarkdownCorrelationWikilink(fileURL: bootstrapURL, targetWikilinkName: hub)
                 }
             } catch {
                 try? fileManager.removeItem(at: nextURL)
@@ -1874,8 +1883,15 @@ struct WebView: NSViewRepresentable {
         }
 
         private func buildVaultPayload(for rootURL: URL) -> [String: Any] {
-            let folders = readFolderTree(at: rootURL)
-            let markdownFiles = readAllMarkdownFiles(at: rootURL)
+            let folders = readFolderTree(at: rootURL, vaultRootURL: rootURL)
+            var markdownFiles = readAllMarkdownFiles(at: rootURL)
+            let centralName = UserDefaults.standard
+                .string(forKey: Self.centralBrainFolderNameDefaultsKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let c = centralName, !c.isEmpty {
+                let hubPath = "\(c)/\(c).md"
+                markdownFiles.removeAll { $0.path.caseInsensitiveCompare(hubPath) == .orderedSame }
+            }
             let graph = buildGraph(from: markdownFiles)
             let conversations = buildConversations(from: markdownFiles)
 
@@ -1912,7 +1928,7 @@ struct WebView: NSViewRepresentable {
             }
         }
 
-        private func readFolderTree(at directoryURL: URL) -> [NativeFolderNode] {
+        private func readFolderTree(at directoryURL: URL, vaultRootURL: URL) -> [NativeFolderNode] {
             guard
                 let entries = try? fileManager.contentsOfDirectory(
                     at: directoryURL,
@@ -1922,6 +1938,11 @@ struct WebView: NSViewRepresentable {
             else {
                 return []
             }
+
+            let isVaultRoot = directoryURL.standardizedFileURL.path == vaultRootURL.standardizedFileURL.path
+            let hiddenCentral = UserDefaults.standard
+                .string(forKey: Self.centralBrainFolderNameDefaultsKey)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
 
             var folders: [NativeFolderNode] = []
 
@@ -1935,10 +1956,16 @@ struct WebView: NSViewRepresentable {
                     continue
                 }
 
+                if isVaultRoot,
+                   let h = hiddenCentral, !h.isEmpty,
+                   entry.lastPathComponent.caseInsensitiveCompare(h) == .orderedSame {
+                    continue
+                }
+
                 folders.append(
                     NativeFolderNode(
                         name: entry.lastPathComponent,
-                        children: readFolderTree(at: entry)
+                        children: readFolderTree(at: entry, vaultRootURL: vaultRootURL)
                     )
                 )
             }

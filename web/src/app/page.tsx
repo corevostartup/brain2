@@ -48,6 +48,7 @@ import {
   coerceNativeVaultGraph,
   fingerprintNativeVaultState,
 } from "@/lib/nativeVaultPayload";
+import { saveCentralBrainNameToStorage } from "@/lib/brain2CentralFolder";
 import { emitNativeDebug, isNativeShellBridgeAvailable } from "@/lib/nativeDebug";
 import { requestGoogleDriveAccessToken } from "@/lib/googleDrive";
 import { loadVaultFromGoogleDriveFolder } from "@/lib/googleDriveVault";
@@ -923,6 +924,18 @@ export default function Home() {
       timeoutIds.forEach(clearTimeout);
     };
   }, [applyVaultData, isAuthenticated]);
+
+  useEffect(() => {
+    const onCentralBrainReady = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ centralBrainFolderName?: string }>).detail;
+      const n = detail?.centralBrainFolderName?.trim();
+      if (n) {
+        saveCentralBrainNameToStorage(n);
+      }
+    };
+    window.addEventListener("brain2-native-central-brain-ready", onCentralBrainReady);
+    return () => window.removeEventListener("brain2-native-central-brain-ready", onCentralBrainReady);
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) {

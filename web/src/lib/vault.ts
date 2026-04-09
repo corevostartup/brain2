@@ -2,6 +2,7 @@
 
 import {
   ensureCentralBrainFolderOnDirectoryHandle,
+  isCentralBrainHubMarkdownPath,
   loadCentralBrainNameFromStorage,
 } from "./brain2CentralFolder";
 
@@ -157,16 +158,30 @@ export type FolderTreeNode = {
 // ── Read folder tree (directories + .md files) from a directory handle ──
 
 export async function readFolderTree(
-  dirHandle: FileSystemDirectoryHandle
+  dirHandle: FileSystemDirectoryHandle,
+  depth = 0,
+  hiddenRootFolderName: string | null = loadCentralBrainNameFromStorage(),
 ): Promise<FolderTreeNode[]> {
   const folders: FolderTreeNode[] = [];
   const files: FolderTreeNode[] = [];
+  const hidden = hiddenRootFolderName?.trim() ?? "";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for await (const entry of (dirHandle as any).values() as AsyncIterable<FileSystemHandle>) {
     if (entry.kind === "directory" && !entry.name.startsWith(".")) {
+      if (
+        depth === 0 &&
+        hidden.length > 0 &&
+        entry.name.localeCompare(hidden, undefined, { sensitivity: "base" }) === 0
+      ) {
+        continue;
+      }
       try {
-        const children = await readFolderTree(entry as FileSystemDirectoryHandle);
+        const children = await readFolderTree(
+          entry as FileSystemDirectoryHandle,
+          depth + 1,
+          hiddenRootFolderName,
+        );
         folders.push({ name: entry.name, kind: "folder", children });
       } catch {
         folders.push({ name: entry.name, kind: "folder", children: [] });
@@ -185,7 +200,8 @@ export async function readFolderTree(
 
 async function readAllMarkdownFiles(
   dirHandle: FileSystemDirectoryHandle,
-  basePath = ""
+  basePath = "",
+  centralName: string | null = loadCentralBrainNameFromStorage(),
 ): Promise<{ name: string; path: string; content: string }[]> {
   const files: { name: string; path: string; content: string }[] = [];
 
@@ -194,6 +210,9 @@ async function readAllMarkdownFiles(
     const entryPath = basePath ? `${basePath}/${entry.name}` : entry.name;
 
     if (entry.kind === "file" && entry.name.endsWith(".md")) {
+      if (isCentralBrainHubMarkdownPath(entryPath, centralName)) {
+        continue;
+      }
       try {
         const fileHandle = entry as FileSystemFileHandle;
         const file = await fileHandle.getFile();
@@ -209,7 +228,8 @@ async function readAllMarkdownFiles(
       try {
         const subFiles = await readAllMarkdownFiles(
           entry as FileSystemDirectoryHandle,
-          entryPath
+          entryPath,
+          centralName,
         );
         files.push(...subFiles);
       } catch {

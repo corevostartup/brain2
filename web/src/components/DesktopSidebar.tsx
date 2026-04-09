@@ -27,8 +27,18 @@ import {
   Trash2,
 } from "lucide-react";
 import { formatConversationDisplayTitle, type FolderTreeNode, type VaultConversation } from "@/lib/vault";
+import { loadCentralBrainNameFromStorage } from "@/lib/brain2CentralFolder";
 
-const HIDDEN_ROOT_FOLDERS = new Set(["Brain2Memories"]);
+const DEFAULT_HIDDEN_ROOT_FOLDERS = new Set(["Brain2Memories"]);
+
+function isHiddenRootFolderName(name: string, hidden: Set<string>): boolean {
+  for (const h of hidden) {
+    if (name.localeCompare(h, undefined, { sensitivity: "base" }) === 0) {
+      return true;
+    }
+  }
+  return false;
+}
 
 type FolderRow = {
   name: string;
@@ -61,7 +71,8 @@ type DraftFolderPlacement = {
 function collectFolderRows(
   nodes: FolderTreeNode[],
   parentPath = "",
-  depth = 0
+  depth = 0,
+  hiddenRootFolderNames: Set<string> = DEFAULT_HIDDEN_ROOT_FOLDERS,
 ): FolderRow[] {
   const rows: FolderRow[] = [];
 
@@ -70,13 +81,13 @@ function collectFolderRows(
       continue;
     }
 
-    if (depth === 0 && HIDDEN_ROOT_FOLDERS.has(node.name)) {
+    if (depth === 0 && isHiddenRootFolderName(node.name, hiddenRootFolderNames)) {
       continue;
     }
 
     const rowPath = parentPath ? `${parentPath}/${node.name}` : node.name;
     rows.push({ name: node.name, path: rowPath, depth });
-    rows.push(...collectFolderRows(node.children, rowPath, depth + 1));
+    rows.push(...collectFolderRows(node.children, rowPath, depth + 1, hiddenRootFolderNames));
   }
 
   return rows;
@@ -176,7 +187,19 @@ export default function DesktopSidebar({
   }, [normalizedUserPhotoURL]);
 
   const showUserPhoto = hasUserPhoto && !userPhotoLoadFailed;
-  const folderRows = useMemo(() => collectFolderRows(vaultFolders), [vaultFolders]);
+  const hiddenRootFolderNames = useMemo(() => {
+    const s = new Set<string>(["Brain2Memories"]);
+    const c = loadCentralBrainNameFromStorage();
+    if (c?.trim()) {
+      s.add(c.trim());
+    }
+    return s;
+  }, [vaultFolders]);
+
+  const folderRows = useMemo(
+    () => collectFolderRows(vaultFolders, "", 0, hiddenRootFolderNames),
+    [vaultFolders, hiddenRootFolderNames],
+  );
   const [folderContextMenu, setFolderContextMenu] = useState<FolderContextMenuState | null>(null);
   const [conversationContextMenu, setConversationContextMenu] = useState<ConversationContextMenuState | null>(null);
   const [createFolderParentPath, setCreateFolderParentPath] = useState<string | null>(null);

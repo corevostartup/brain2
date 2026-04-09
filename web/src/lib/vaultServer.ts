@@ -174,6 +174,18 @@ async function ensureMarkdownCorrelationWikilink(fileAbsolutePath: string, targe
   await fs.writeFile(fileAbsolutePath, normalizedNextMarkdown, "utf8");
 }
 
+/** Mesmo nome que `brain2-central-brain-folder-name` (ficheiro opcional na raiz do preset). */
+async function readPresetCentralBrainFolderName(): Promise<string | null> {
+  try {
+    const markerPath = path.join(PRESET_VAULT_PATH, ".brain2-central-folder-name");
+    const text = await fs.readFile(markerPath, "utf8");
+    const line = text.split(/\r?\n/u)[0]?.trim();
+    return line && line.length > 0 ? line : null;
+  } catch {
+    return null;
+  }
+}
+
 async function readFolderTreeFromPath(dirPath: string): Promise<FolderTreeNode[]> {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
   const folders: FolderTreeNode[] = [];
@@ -405,6 +417,14 @@ export async function createPresetFolder(parentPath: string, folderName: string)
         await ensureMarkdownCorrelationWikilink(bootstrapConversationAbsolutePath, parentFolderName);
         await ensureMarkdownCorrelationWikilink(parentCorrelationAbsolutePath, safeFolderName);
       }
+    }
+
+    const centralHub = await readPresetCentralBrainFolderName();
+    if (
+      centralHub &&
+      safeFolderName.localeCompare(centralHub, undefined, { sensitivity: "base" }) !== 0
+    ) {
+      await ensureMarkdownCorrelationWikilink(bootstrapConversationAbsolutePath, centralHub);
     }
   } catch (error) {
     // Keep folder creation atomic for the caller: if bootstrap .md fails, rollback the folder.

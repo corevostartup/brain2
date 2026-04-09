@@ -4,6 +4,9 @@
  * e dentro o ficheiro `Nome.md` com o mesmo nome.
  *
  * Isto é o eixo onde as pastas na raiz se ligam ao «cérebro».
+ *
+ * API preset (vaultServer): ficheiro opcional na raiz do vault `.brain2-central-folder-name`
+ * (uma linha = nome da pasta-central) para gravar `[[Nome]]` ao criar pastas irmãs.
  */
 
 export const BRAIN2_CENTRAL_BRAIN_NAME_KEY = "brain2-central-brain-folder-name";
@@ -41,6 +44,28 @@ export function loadCentralBrainNameFromStorage(): string | null {
   } catch {
     return null;
   }
+}
+
+/** Caminho relativo `Nome/Nome.md` da pasta-central (eixo); não deve aparecer no menu lateral nem como conversa. */
+export function isCentralBrainHubMarkdownPath(
+  relativePath: string,
+  centralName: string | null | undefined,
+): boolean {
+  const c = centralName?.trim();
+  if (!c) return false;
+  const norm = relativePath.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const expected = `${c}/${c}.md`;
+  return norm.localeCompare(expected, undefined, { sensitivity: "base" }) === 0;
+}
+
+/** Pasta na raiz do vault com o nome da pasta-central — oculta no menu lateral (como `Brain2Memories`). */
+export function shouldHideRootVaultFolderName(
+  folderName: string,
+  centralName: string | null | undefined,
+): boolean {
+  const c = centralName?.trim();
+  if (!c) return false;
+  return folderName.localeCompare(c, undefined, { sensitivity: "base" }) === 0;
 }
 
 /**

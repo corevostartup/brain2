@@ -1,4 +1,23 @@
+import {
+  isCentralBrainHubMarkdownPath,
+  loadCentralBrainNameFromStorage,
+} from "@/lib/brain2CentralFolder";
 import type { FolderTreeNode, VaultConversation, VaultGraph } from "@/lib/vault";
+
+function filterFolderTreeHidingCentralHubAtRoot(
+  nodes: FolderTreeNode[],
+  centralName: string | null,
+): FolderTreeNode[] {
+  const c = centralName?.trim();
+  if (!c) return nodes;
+  return nodes.filter(
+    (node) =>
+      !(
+        node.kind === "folder" &&
+        node.name.localeCompare(c, undefined, { sensitivity: "base" }) === 0
+      ),
+  );
+}
 import {
   buildConversationsFromMarkdownFiles,
   buildGraphFromMarkdownFiles,
@@ -183,9 +202,14 @@ export async function loadVaultFromGoogleDriveFolder(
   const markdownFiles: VaultMarkdownFile[] = [];
   await walkDriveFolder(trimmedRoot, "", accessToken, markdownFiles);
 
-  const folders = buildFolderTreeFromMarkdownPaths(markdownFiles.map((f) => f.path));
-  const conversations = buildConversationsFromMarkdownFiles(markdownFiles);
-  const graph = buildGraphFromMarkdownFiles(markdownFiles);
+  const central = loadCentralBrainNameFromStorage();
+  const markdownFilesForUI = markdownFiles.filter(
+    (f) => !isCentralBrainHubMarkdownPath(f.path, central),
+  );
+  let folders = buildFolderTreeFromMarkdownPaths(markdownFilesForUI.map((f) => f.path));
+  folders = filterFolderTreeHidingCentralHubAtRoot(folders, central);
+  const conversations = buildConversationsFromMarkdownFiles(markdownFilesForUI);
+  const graph = buildGraphFromMarkdownFiles(markdownFilesForUI);
 
   const pathLabel = displayLabel.trim()
     ? `Google Drive: ${displayLabel.trim()}`
