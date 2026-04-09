@@ -14,16 +14,56 @@ import WebKit
 /// Mesma base da landing Brain2 (cinza quase preto).
 private let appChromeBackground = Color(red: 12 / 255, green: 12 / 255, blue: 12 / 255)
 
+@MainActor
+final class DirectoryOnboardingModel: ObservableObject {
+    static let userDefaultsKey = "brain2-directory-onboarding-completed"
+
+    @Published var isPresented = false
+
+    /// Chamado pelo WebView Coordinator após login Google bem-sucedido.
+    var pickLocalHandler: (() -> Void)?
+
+    var hasCompletedOnboarding: Bool {
+        UserDefaults.standard.bool(forKey: Self.userDefaultsKey)
+    }
+
+    func requestPresentationAfterFirstSuccessfulLogin() {
+        guard !hasCompletedOnboarding else { return }
+        isPresented = true
+    }
+
+    func markCompletedAndDismiss() {
+        UserDefaults.standard.set(true, forKey: Self.userDefaultsKey)
+        isPresented = false
+    }
+
+    func pickLocal() {
+        pickLocalHandler?()
+    }
+}
+
 struct ContentView: View {
+    @StateObject private var directoryOnboarding = DirectoryOnboardingModel()
+
     var body: some View {
         ZStack(alignment: .topLeading) {
-            WebView(urlString: "https://brain2corevo.netlify.app/")
-                .padding(.top, 34)
+            WebView(
+                urlString: "https://brain2corevo.netlify.app/",
+                directoryOnboarding: directoryOnboarding
+            )
+            .padding(.top, 34)
 
             // Faixa arrastavel no topo para mover a janela sem barra de titulo nativa.
             WindowDragRegion()
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
+                .allowsHitTesting(!directoryOnboarding.isPresented)
+
+            if directoryOnboarding.isPresented {
+                DirectoryOnboardingOverlay(model: directoryOnboarding)
+                    .transition(.opacity)
+                    .zIndex(50)
+            }
         }
         .ignoresSafeArea()
         .background(appChromeBackground)
@@ -33,6 +73,7 @@ struct ContentView: View {
 
 struct WebView: NSViewRepresentable {
     let urlString: String
+    @ObservedObject var directoryOnboarding: DirectoryOnboardingModel
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -61,10 +102,19 @@ struct WebView: NSViewRepresentable {
             )
         }
         loadURL(in: webView)
+        // Liga o modelo já no makeNSView: se o login nativo terminar antes do primeiro updateNSView,
+        // `directoryOnboarding` deixa de ser nil (antes era só weak + update).
+        context.coordinator.directoryOnboarding = directoryOnboarding
         return webView
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.directoryOnboarding = directoryOnboarding
+        directoryOnboarding.pickLocalHandler = { [weak coordinator] in
+            coordinator?.presentDirectoryPickerFromOnboarding()
+        }
+
         guard let currentURL = nsView.url?.absoluteString else { return }
         if currentURL != urlString {
             loadURL(in: nsView)
@@ -101,6 +151,8 @@ struct WebView: NSViewRepresentable {
         private static let llmApiKeyDefaultsKey = "brain2-llm-api-key"
 
         private weak var webView: WKWebView?
+        /// Referência forte: o @StateObject em ContentView mantém o ciclo de vida; evita nil antes do primeiro updateNSView.
+        var directoryOnboarding: DirectoryOnboardingModel?
         private var googleAuthSession: ASWebAuthenticationSession?
         private var googleLoopbackReceiver: OAuthLoopbackRedirectReceiver?
         private var googleOAuthCompletedViaLoopback = false
@@ -148,7 +200,7 @@ struct WebView: NSViewRepresentable {
             }
 
             if type == "pickDirectory" {
-                presentDirectoryPicker()
+                presentDirectoryPicker(onVaultPersisted: nil)
                 return
             }
 
@@ -188,6 +240,14 @@ struct WebView: NSViewRepresentable {
 
             if type == "startGoogleSignIn" {
                 startGoogleSignInWithSystemBrowser()
+                return
+            }
+
+            /// Login feito só na web (ex.: Firebase no WKWebView) — OAuth nativo não corre, mas queremos o mesmo onboarding.
+            if type == "webAppSignedIn" {
+                DispatchQueue.main.async { [weak self] in
+                    self?.maybePresentDirectoryOnboardingAfterSignIn()
+                }
                 return
             }
 
@@ -440,7 +500,25 @@ struct WebView: NSViewRepresentable {
                 window.dispatchEvent(new CustomEvent('brain2-native-google-tokens', { detail: \(json) }));
                 """
                 self?.webView?.evaluateJavaScript(script, completionHandler: nil)
+                self?.maybePresentDirectoryOnboardingAfterSignIn()
             }
+        }
+
+        /// Chamado após OAuth nativo **ou** mensagem `webAppSignedIn` da página (login só na web).
+        private func maybePresentDirectoryOnboardingAfterSignIn() {
+            if !Thread.isMainThread {
+                DispatchQueue.main.async { [weak self] in
+                    self?.maybePresentDirectoryOnboardingAfterSignIn()
+                }
+                return
+            }
+            guard let onboarding = directoryOnboarding else { return }
+            guard !onboarding.hasCompletedOnboarding else { return }
+            if resolvePersistedVaultURL() != nil {
+                UserDefaults.standard.set(true, forKey: DirectoryOnboardingModel.userDefaultsKey)
+                return
+            }
+            onboarding.requestPresentationAfterFirstSuccessfulLogin()
         }
 
         private func publishGoogleSignInError(_ message: String) {
@@ -592,6 +670,41 @@ struct WebView: NSViewRepresentable {
                 } catch (_) {}
               });
             }
+            (function () {
+              function postSignedIn() {
+                try {
+                  window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'webAppSignedIn' });
+                } catch (_) {}
+              }
+              window.Brain2Native.notifySignedIn = function () { postSignedIn(); };
+              window.addEventListener('brain2-web-signed-in', postSignedIn);
+              if (window.__brain2FirebaseAuthProbe) {
+                clearInterval(window.__brain2FirebaseAuthProbe);
+              }
+              window.__brain2FirebaseAuthProbe = setInterval(function () {
+                try {
+                  if (window.__brain2FirebaseAuthHooked) {
+                    clearInterval(window.__brain2FirebaseAuthProbe);
+                    window.__brain2FirebaseAuthProbe = null;
+                    return;
+                  }
+                  if (window.firebase && firebase.auth) {
+                    window.__brain2FirebaseAuthHooked = true;
+                    clearInterval(window.__brain2FirebaseAuthProbe);
+                    window.__brain2FirebaseAuthProbe = null;
+                    firebase.auth().onAuthStateChanged(function (user) {
+                      if (user) postSignedIn();
+                    });
+                  }
+                } catch (_) {}
+              }, 250);
+              setTimeout(function () {
+                if (window.__brain2FirebaseAuthProbe) {
+                  clearInterval(window.__brain2FirebaseAuthProbe);
+                  window.__brain2FirebaseAuthProbe = null;
+                }
+              }, 45000);
+            })();
             window.dispatchEvent(new CustomEvent('brain2-native-bridge-ready'));
             """
             webView?.evaluateJavaScript(script, completionHandler: nil)
@@ -863,7 +976,14 @@ struct WebView: NSViewRepresentable {
             return "\(correlationLine)\n\(markdown)"
         }
 
-        private func presentDirectoryPicker() {
+        /// Fluxo de escolha de pasta após o onboarding (fecha o overlay quando o vault fica persistido).
+        func presentDirectoryPickerFromOnboarding() {
+            presentDirectoryPicker(onVaultPersisted: { [weak self] in
+                self?.directoryOnboarding?.markCompletedAndDismiss()
+            })
+        }
+
+        private func presentDirectoryPicker(onVaultPersisted: (() -> Void)?) {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
 
@@ -909,6 +1029,7 @@ struct WebView: NSViewRepresentable {
                 }
 
                 self.publishVaultSelection(for: resolvedURL)
+                onVaultPersisted?()
             }
         }
 

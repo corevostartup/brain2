@@ -1432,6 +1432,9 @@ export default function Home() {
   }, []);
 
   const handleLogout = useCallback(async () => {
+    if (!window.confirm("Deseja sair da sua conta?")) {
+      return;
+    }
     try {
       const auth = getFirebaseAuthClient();
       await signOut(auth);
