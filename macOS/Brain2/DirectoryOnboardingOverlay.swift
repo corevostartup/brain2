@@ -8,13 +8,21 @@ import SwiftUI
 
 struct DirectoryOnboardingOverlay: View {
     @ObservedObject var model: DirectoryOnboardingModel
+    /// Quando o conteúdo é mostrado num `.sheet` nativo, o fundo escuro extra costuma ser redundante.
+    var dimBackground: Bool = true
     /// Campo apenas visual — persistência virá depois.
     @State private var brainDisplayName: String = ""
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.55)
-                .ignoresSafeArea()
+            Group {
+                if dimBackground {
+                    Color.black.opacity(0.55)
+                } else {
+                    Color.clear
+                }
+            }
+            .ignoresSafeArea()
 
             Group {
                 switch model.step {

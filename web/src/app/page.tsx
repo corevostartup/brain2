@@ -561,6 +561,28 @@ export default function Home() {
     };
   }, []);
 
+  /** macOS shell: pede ao nativo o onboarding de diretório quando a sessão Firebase já está ativa (fiável vs. só localStorage). */
+  useEffect(() => {
+    if (typeof window === "undefined" || !isAuthenticated || !isNativeMacShell) {
+      return;
+    }
+    const requestOnboarding = () => {
+      try {
+        const w = window as Window & {
+          Brain2Native?: { requestDirectoryOnboarding?: () => void };
+        };
+        w.Brain2Native?.requestDirectoryOnboarding?.();
+      } catch {
+        /* ignore */
+      }
+    };
+    if (document.documentElement.hasAttribute("data-brain2-native")) {
+      requestOnboarding();
+    } else {
+      window.addEventListener("brain2-native-bridge-ready", requestOnboarding, { once: true });
+    }
+  }, [isAuthenticated, isNativeMacShell]);
+
   const selectedConversation = useMemo(
     () => vaultConversations.find((conversation) => conversation.id === selectedConversationId) ?? null,
     [selectedConversationId, vaultConversations]

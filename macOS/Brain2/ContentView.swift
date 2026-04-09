@@ -76,16 +76,16 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
                 .allowsHitTesting(!directoryOnboarding.isPresented)
-
-            if directoryOnboarding.isPresented {
-                DirectoryOnboardingOverlay(model: directoryOnboarding)
-                    .transition(.opacity)
-                    .zIndex(50)
-            }
         }
         .ignoresSafeArea()
         .background(appChromeBackground)
         .background(WindowChromeConfigurator())
+        /// Folha nativa: o WKWebView costuma ficar por cima de overlays SwiftUI na mesma janela; o sheet ancora à janela e funciona bem com vários monitores.
+        .sheet(isPresented: $directoryOnboarding.isPresented) {
+            DirectoryOnboardingOverlay(model: directoryOnboarding, dimBackground: false)
+                .frame(minWidth: 520, minHeight: 420)
+                .interactiveDismissDisabled(true)
+        }
     }
 }
 
@@ -107,6 +107,7 @@ struct WebView: NSViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         context.coordinator.attach(webView: webView)
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         // Google/Firebase OAuth costuma bloquear user-agents de WebView “puros”; Safari reduz falhas no login.
         webView.customUserAgent =
@@ -160,7 +161,7 @@ struct WebView: NSViewRepresentable {
         webView.load(request)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler, ASWebAuthenticationPresentationContextProviding {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, ASWebAuthenticationPresentationContextProviding {
         static let messageHandlerName = "brain2Native"
         private static let selectedVaultPathDefaultsKey = "brain2-selected-vault-path"
         private static let selectedVaultBookmarkDefaultsKey = "brain2-selected-vault-bookmark"
@@ -188,6 +189,59 @@ struct WebView: NSViewRepresentable {
             self.webView = webView
         }
 
+        // MARK: - WKUIDelegate (alert/confirm nativos — sem isto, `window.confirm` no WKWebView pode não aparecer ou falhar em ecrã externos)
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping () -> Void
+        ) {
+            let alert = NSAlert()
+            alert.messageText = message
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            presentJSAlert(alert, for: webView, completion: completionHandler)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping (Bool) -> Void
+        ) {
+            let alert = NSAlert()
+            alert.messageText = message
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Cancelar")
+            presentJSConfirm(alert, for: webView, completionHandler: completionHandler)
+        }
+
+        private func presentJSAlert(_ alert: NSAlert, for webView: WKWebView, completion: @escaping () -> Void) {
+            if let window = webView.window {
+                alert.beginSheetModal(for: window) { _ in
+                    completion()
+                }
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+                completion()
+            }
+        }
+
+        private func presentJSConfirm(_ alert: NSAlert, for webView: WKWebView, completionHandler: @escaping (Bool) -> Void) {
+            if let window = webView.window {
+                alert.beginSheetModal(for: window) { response in
+                    completionHandler(response == .alertFirstButtonReturn)
+                }
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+                let ok = alert.runModal() == .alertFirstButtonReturn
+                completionHandler(ok)
+            }
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             injectNativeBridge()
             publishPersistedVaultIfAvailable()
@@ -195,10 +249,12 @@ struct WebView: NSViewRepresentable {
             scheduleMacOSOnboardingSessionProbe()
         }
 
-        /// Fallback no macOS: se `webAppSignedIn` não disparar (Firebase modular, etc.), tenta detetar sessão via localStorage.
+        /// Fallback no macOS: se `webAppSignedIn` não disparar (Firebase modular, etc.), tenta detetar sessão via storages.
         private func scheduleMacOSOnboardingSessionProbe() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                self?.runMacOSOnboardingLocalStorageProbe()
+            for delay in [2.0, 6.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.runMacOSOnboardingLocalStorageProbe()
+                }
             }
         }
 
@@ -213,13 +269,16 @@ struct WebView: NSViewRepresentable {
 
             let script = """
             (function () {
-              try {
-                for (var i = 0; i < localStorage.length; i++) {
-                  var k = localStorage.key(i);
-                  if (k && k.toLowerCase().indexOf('firebase') !== -1) return true;
-                }
-              } catch (e) {}
-              return false;
+              function scan(storage) {
+                try {
+                  for (var i = 0; i < storage.length; i++) {
+                    var k = storage.key(i);
+                    if (k && k.toLowerCase().indexOf('firebase') !== -1) return true;
+                  }
+                } catch (e) {}
+                return false;
+              }
+              return scan(localStorage) || scan(sessionStorage);
             })();
             """
             webView.evaluateJavaScript(script) { [weak self] result, _ in
@@ -305,6 +364,14 @@ struct WebView: NSViewRepresentable {
 
             /// Login feito só na web (ex.: Firebase no WKWebView) — OAuth nativo não corre, mas queremos o mesmo onboarding.
             if type == "webAppSignedIn" {
+                DispatchQueue.main.async { [weak self] in
+                    self?.maybePresentDirectoryOnboardingAfterSignIn()
+                }
+                return
+            }
+
+            /// A web chama quando a sessão Firebase está ativa (ex.: após `onAuthStateChanged`) — fiável com Firebase modular.
+            if type == "requestDirectoryOnboarding" {
                 DispatchQueue.main.async { [weak self] in
                     self?.maybePresentDirectoryOnboardingAfterSignIn()
                 }
@@ -681,6 +748,11 @@ struct WebView: NSViewRepresentable {
             window.Brain2Native.startGoogleSignIn = function () {
               try {
                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'startGoogleSignIn' });
+              } catch (_) {}
+            };
+            window.Brain2Native.requestDirectoryOnboarding = function () {
+              try {
+                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'requestDirectoryOnboarding' });
               } catch (_) {}
             };
             window.Brain2Native.debugLog = function (payload) {
