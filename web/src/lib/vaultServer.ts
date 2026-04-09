@@ -479,7 +479,7 @@ export async function renamePresetFolder(
 
   await fs.rename(currentAbsolutePath, nextAbsolutePath);
 
-  // Regra do vault: `NomeDaPasta/NomeDaPasta.md` acompanha o nome da pasta.
+  // Regra Brain2 (ver `brain2CentralFolder.ts` na web): `NomeDaPasta/NomeDaPasta.md` na mesma pasta.
   const oldFolderName = path.basename(normalizedFolderPath);
   const correlationOld = path.join(nextAbsolutePath, `${oldFolderName}.md`);
   const correlationNew = path.join(nextAbsolutePath, `${safeFolderName}.md`);

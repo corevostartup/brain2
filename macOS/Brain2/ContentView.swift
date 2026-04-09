@@ -9,63 +9,129 @@ import AppKit
 import AuthenticationServices
 import Foundation
 import SwiftUI
-import WebKit
+@preconcurrency import WebKit
 
 /// Mesma base da landing Brain2 (cinza quase preto).
 private let appChromeBackground = Color(red: 12 / 255, green: 12 / 255, blue: 12 / 255)
 
+/// Com `opacity(0)`, o `WKWebView` ainda responde a `hitTest` e rouba cliques do overlay SwiftUI por cima.
+/// `internal` (não `private`) para `NSViewRepresentable` poder expor os métodos do protocolo com o mesmo nível de acesso que `WebView`.
+final class OnboardingAwareWebView: WKWebView {
+    /// `true` = este NSView não intercepta rato; o evento segue para as vistas SwiftUI (onboarding).
+    var forwardsMouseEventsToOverlay = false {
+        didSet { needsLayout = true }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if forwardsMouseEventsToOverlay {
+            return nil
+        }
+        return super.hitTest(point)
+    }
+}
+
 enum DirectoryOnboardingStep: Equatable {
     /// Escolha Local / Cloud / Drive
     case chooseDirectory
-    /// Após escolher pasta local — nome ainda só UI
+    /// Momento «splash» antes do formulário (título «Ative o seu cérebro»).
+    case activateBrainIntro
+    /// Formulário do nome do cérebro (centro do vault).
     case activateBrain
+}
+
+/// Escolha no passo 1 (antes de abrir o seletor de pasta).
+enum DirectoryOnboardingStorageChoice: Equatable {
+    case none
+    case local
 }
 
 @MainActor
 final class DirectoryOnboardingModel: ObservableObject {
     static let userDefaultsKey = "brain2-directory-onboarding-completed"
-    private static let vaultBookmarkDefaultsKey = "brain2-selected-vault-bookmark"
 
     @Published var isPresented = false
     @Published var step: DirectoryOnboardingStep = .chooseDirectory
+    /// Só depois de «Local» o botão Seguinte abre o painel de pastas.
+    @Published var storageChoice: DirectoryOnboardingStorageChoice = .none
 
     /// Chamado pelo WebView Coordinator após login Google bem-sucedido.
     var pickLocalHandler: (() -> Void)?
 
+    /// Cria `{vaultRoot}/{nome}/{nome}.md` no disco e só então conclui o onboarding.
+    var completeOnboardingWithBrainCentralNameHandler: ((String, @escaping (Error?) -> Void) -> Void)?
+
+    /// Com `alwaysShowAfterLoginPhase` não gravamos UserDefaults; o overlay não deve reabrir na mesma sessão após «Continuar» (evita loop).
+    private var finishedNativeDirectoryOnboardingThisSession = false
+
     var hasCompletedOnboarding: Bool {
         if Brain2OnboardingTesting.alwaysShowAfterLoginPhase {
-            return false
+            // Fase de testes: ignorar UserDefaults (valor antigo `true` bloqueava o overlay após login).
+            // Só bloqueia na mesma sessão depois de concluir o fluxo; novo arranque volta a mostrar.
+            return finishedNativeDirectoryOnboardingThisSession
         }
         return UserDefaults.standard.bool(forKey: Self.userDefaultsKey)
     }
 
-    private var hasPersistedVaultBookmark: Bool {
-        UserDefaults.standard.data(forKey: Self.vaultBookmarkDefaultsKey) != nil
-    }
-
-    /// Abre o fluxo: se já existe vault, mostra direto «Ative o seu cérebro» em vez de saltar tudo em silêncio.
+    /// Sempre começa em «Escolha o diretório»; o passo «Ative o seu cérebro» só vem depois de escolher pasta Local (ou Seguinte explícito no fluxo web).
+    /// Chamado várias vezes (login, `didFinish`, timers de fallback). Se o overlay já estiver visível, não repor passo/escolha — senão apaga-se a seleção «Local» e o Seguinte desaparece.
     func requestPresentationAfterFirstSuccessfulLogin() {
         guard !hasCompletedOnboarding else { return }
-        step = hasPersistedVaultBookmark ? .activateBrain : .chooseDirectory
+        guard !isPresented else { return }
+        step = .chooseDirectory
+        storageChoice = .none
         isPresented = true
     }
 
     func advanceToActivateBrainAfterVaultChosen() {
+        step = .activateBrainIntro
+    }
+
+    func advanceFromBrainIntroToForm() {
+        guard step == .activateBrainIntro else { return }
         step = .activateBrain
     }
 
     func goBackToChooseDirectory() {
         step = .chooseDirectory
+        storageChoice = .local
     }
 
-    func markCompletedAndDismiss() {
+    /// `brainCentralFolderName`: nome da pasta-central em `DiretórioEscolhido/Nome/` e do ficheiro `Nome.md`.
+    func markCompletedAndDismiss(brainCentralFolderName: String) {
+        let trimmed = brainCentralFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        completeOnboardingWithBrainCentralNameHandler?(trimmed) { [weak self] error in
+            Task { @MainActor in
+                guard let self else { return }
+                if let error {
+                    let alert = NSAlert()
+                    alert.messageText = "Não foi possível criar a pasta-central"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                    return
+                }
+                self.sealOnboardingAfterCentralFolderReady()
+            }
+        }
+    }
+
+    private func sealOnboardingAfterCentralFolderReady() {
+        finishedNativeDirectoryOnboardingThisSession = true
         if !Brain2OnboardingTesting.alwaysShowAfterLoginPhase {
             UserDefaults.standard.set(true, forKey: Self.userDefaultsKey)
         }
         isPresented = false
         step = .chooseDirectory
+        storageChoice = .none
     }
 
+    func selectLocalStorage() {
+        storageChoice = .local
+    }
+
+    /// Abre o painel de pastas (chamado pelo botão Seguinte após escolher Local).
     func pickLocal() {
         pickLocalHandler?()
     }
@@ -83,6 +149,8 @@ struct ContentView: View {
             .padding(.top, 34)
             /// WKWebView compõe por cima de vistas SwiftUI no mesmo ZStack; esconder o conteúdo web garante que o overlay fique visível.
             .opacity(directoryOnboarding.isPresented ? 0 : 1)
+            /// Com alpha 0 o NSView ainda pode roubar cliques — obrigatório para botões do onboarding responderem.
+            .allowsHitTesting(!directoryOnboarding.isPresented)
             .animation(.easeOut(duration: 0.15), value: directoryOnboarding.isPresented)
 
             // Faixa arrastavel no topo para mover a janela sem barra de titulo nativa.
@@ -95,9 +163,10 @@ struct ContentView: View {
             /// Overlay em ecrã completo (evita `.sheet` no macOS que por vezes não aparece por cima do WKWebView).
             if directoryOnboarding.isPresented {
                 DirectoryOnboardingOverlay(model: directoryOnboarding, dimBackground: true)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .background(appChromeBackground)
                     .zIndex(1_000_000)
+                    .allowsHitTesting(true)
                     .transition(.opacity)
             }
         }
@@ -116,14 +185,14 @@ struct WebView: NSViewRepresentable {
         Coordinator()
     }
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> OnboardingAwareWebView {
         let contentController = WKUserContentController()
         contentController.add(context.coordinator, name: Coordinator.messageHandlerName)
 
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = contentController
 
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = OnboardingAwareWebView(frame: .zero, configuration: configuration)
         context.coordinator.attach(webView: webView)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
@@ -146,12 +215,16 @@ struct WebView: NSViewRepresentable {
         return webView
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {
+    func updateNSView(_ nsView: OnboardingAwareWebView, context: Context) {
         let coordinator = context.coordinator
         coordinator.directoryOnboarding = directoryOnboarding
         directoryOnboarding.pickLocalHandler = { [weak coordinator] in
             coordinator?.presentDirectoryPickerFromOnboarding()
         }
+        directoryOnboarding.completeOnboardingWithBrainCentralNameHandler = { [weak coordinator] name, completion in
+            coordinator?.createCentralBrainFolderStructure(brainCentralName: name, completion: completion)
+        }
+        nsView.forwardsMouseEventsToOverlay = directoryOnboarding.isPresented
 
         guard let currentURL = nsView.url?.absoluteString else { return }
         if currentURL != urlString {
@@ -159,11 +232,11 @@ struct WebView: NSViewRepresentable {
         }
     }
 
-    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ nsView: OnboardingAwareWebView, coordinator: Coordinator) {
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.messageHandlerName)
     }
 
-    private func loadURL(in webView: WKWebView) {
+    private func loadURL(in webView: OnboardingAwareWebView) {
         guard let url = URL(string: urlString) else { return }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         var queryItems = components?.queryItems ?? []
@@ -184,6 +257,8 @@ struct WebView: NSViewRepresentable {
         static let messageHandlerName = "brain2Native"
         private static let selectedVaultPathDefaultsKey = "brain2-selected-vault-path"
         private static let selectedVaultBookmarkDefaultsKey = "brain2-selected-vault-bookmark"
+        /// Nome da pasta-central (mesmo nome que `Nome.md` dentro dela), alinhado com a web.
+        private static let centralBrainFolderNameDefaultsKey = "brain2-central-brain-folder-name"
         private static let memoriesFolderName = "Brain2Memories"
         private static let llmModelDefaultsKey = "brain2-llm-model"
         private static let llmApiKeyDefaultsKey = "brain2-llm-api-key"
@@ -1140,7 +1215,10 @@ struct WebView: NSViewRepresentable {
         /// Fluxo de escolha de pasta no onboarding: após gravar o vault, mostra o passo «Ative seu cérebro».
         func presentDirectoryPickerFromOnboarding() {
             presentDirectoryPicker(onVaultPersisted: { [weak self] in
-                self?.directoryOnboarding?.advanceToActivateBrainAfterVaultChosen()
+                guard let self else { return }
+                Task { @MainActor in
+                    self.directoryOnboarding?.advanceToActivateBrainAfterVaultChosen()
+                }
             })
         }
 
@@ -1153,7 +1231,7 @@ struct WebView: NSViewRepresentable {
                 panel.message = "Selecione o diretório usado para listar Pastas e Your Brain."
                 panel.canChooseDirectories = true
                 panel.canChooseFiles = false
-                panel.canCreateDirectories = false
+                panel.canCreateDirectories = true
                 panel.allowsMultipleSelection = false
                 panel.prompt = "Escolher"
 
@@ -1201,6 +1279,94 @@ struct WebView: NSViewRepresentable {
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
+        }
+
+        /// Regra Brain2: `DiretórioEscolhido/NomeDaPastaCentral/` e `.../NomeDaPastaCentral/NomeDaPastaCentral.md` (alinhado com web).
+        func createCentralBrainFolderStructure(brainCentralName: String, completion: @escaping (Error?) -> Void) {
+            let safeName: String
+            do {
+                safeName = try validateVaultFolderName(brainCentralName)
+            } catch {
+                completion(error)
+                return
+            }
+
+            guard let vaultURL = resolvePersistedVaultURL() else {
+                completion(
+                    NSError(
+                        domain: "Brain2Native",
+                        code: 10,
+                        userInfo: [NSLocalizedDescriptionKey: "Não há pasta do vault selecionada. Escolhe o diretório de novo."]
+                    )
+                )
+                return
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    completion(
+                        NSError(domain: "Brain2Native", code: 11, userInfo: [NSLocalizedDescriptionKey: "Estado inválido."])
+                    )
+                    return
+                }
+                self.withSecurityScopedAccess(to: vaultURL) {
+                    do {
+                        let centralURL = vaultURL.appendingPathComponent(safeName, isDirectory: true)
+                        var isDir: ObjCBool = false
+                        if self.fileManager.fileExists(atPath: centralURL.path, isDirectory: &isDir) {
+                            if !isDir.boolValue {
+                                throw NSError(
+                                    domain: "Brain2Native",
+                                    code: 12,
+                                    userInfo: [NSLocalizedDescriptionKey: "Já existe um ficheiro (não pasta) com o nome «\(safeName)» na raiz do vault."]
+                                )
+                            }
+                        } else {
+                            try self.fileManager.createDirectory(at: centralURL, withIntermediateDirectories: false, attributes: nil)
+                        }
+
+                        let mdURL = centralURL.appendingPathComponent("\(safeName).md")
+                        if !self.fileManager.fileExists(atPath: mdURL.path) {
+                            let body = Self.defaultCentralBrainMarkdownFileContents(displayName: safeName)
+                            try body.write(to: mdURL, atomically: true, encoding: .utf8)
+                        }
+
+                        UserDefaults.standard.set(safeName, forKey: Self.centralBrainFolderNameDefaultsKey)
+                        self.publishCentralBrainFolderReadyToPage(centralFolderName: safeName, vaultRootPath: vaultURL.path)
+                        self.publishVaultSelection(for: vaultURL)
+                        completion(nil)
+                    } catch {
+                        completion(error)
+                    }
+                }
+            }
+        }
+
+        private static func defaultCentralBrainMarkdownFileContents(displayName: String) -> String {
+            """
+            # \(displayName)
+
+            Pasta-central do teu cérebro no Brain2. As pastas na raiz ligam-se a este nome.
+
+            """
+        }
+
+        private func publishCentralBrainFolderReadyToPage(centralFolderName: String, vaultRootPath: String) {
+            let payload: [String: Any] = [
+                "centralBrainFolderName": centralFolderName,
+                "vaultRootPath": vaultRootPath,
+            ]
+            guard JSONSerialization.isValidJSONObject(payload),
+                  let data = try? JSONSerialization.data(withJSONObject: payload),
+                  let json = String(data: data, encoding: .utf8)
+            else { return }
+
+            DispatchQueue.main.async { [weak self] in
+                let script = """
+                window.dispatchEvent(new CustomEvent('brain2-native-central-brain-ready', { detail: \(json) }));
+                """
+                self?.webView?.evaluateJavaScript(script, completionHandler: nil)
+            }
         }
 
         private func renameVaultFolder(_ payload: [String: Any]) {

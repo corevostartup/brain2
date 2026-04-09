@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import {
+  ensureCentralBrainFolderOnDirectoryHandle,
+  sanitizeCentralBrainFolderName,
+  saveCentralBrainNameToStorage,
+} from "@/lib/brain2CentralFolder";
+import { loadDirectoryHandle } from "@/lib/vault";
 
 export const WEB_DIRECTORY_ONBOARDING_KEY = "brain2-web-directory-onboarding-completed";
 
@@ -30,6 +36,34 @@ export function WebDirectoryOnboarding({ onCompleted }: WebDirectoryOnboardingPr
     }
     onCompleted();
   }, [onCompleted]);
+
+  const completeBrainStep = useCallback(async () => {
+    const trimmed = displayName.trim();
+    if (!trimmed) {
+      window.alert("Indique o nome da pasta-central para continuar.");
+      return;
+    }
+    let safe: string;
+    try {
+      safe = sanitizeCentralBrainFolderName(trimmed);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Nome inválido.");
+      return;
+    }
+    saveCentralBrainNameToStorage(safe);
+    const handle = await loadDirectoryHandle();
+    if (handle) {
+      try {
+        await ensureCentralBrainFolderOnDirectoryHandle(handle, safe);
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "Não foi possível criar a pasta no disco.");
+        return;
+      }
+    }
+    persistAndClose();
+  }, [displayName, persistAndClose]);
+
+  const brainNameOk = displayName.trim().length > 0;
 
   return (
     <div
@@ -127,17 +161,19 @@ export function WebDirectoryOnboarding({ onCompleted }: WebDirectoryOnboardingPr
         ) : (
           <>
             <h2 style={{ margin: "0 0 8px", fontSize: 22, fontWeight: 600 }}>Ative o seu cérebro</h2>
-            <p style={{ margin: "0 0 20px", color: "var(--muted-foreground, #888)", fontSize: 14, lineHeight: 1.5 }}>
-              Personalize a experiência com o seu nome (opcional). Pode alterar isto mais tarde.
+            <p style={{ margin: "0 0 12px", color: "var(--muted-foreground, #888)", fontSize: 14, lineHeight: 1.55 }}>
+              Este nome define a <strong>pasta-central</strong> na raiz do vault:{" "}
+              <code style={{ fontSize: 12, opacity: 0.95 }}>…/NomeDaPasta/NomeDaPasta.md</code>. É o eixo onde as pastas
+              na raiz se ligam ao cérebro. Recomendamos o seu próprio nome.
             </p>
             <label style={{ display: "block", fontSize: 13, color: "var(--muted-foreground, #888)", marginBottom: 8 }}>
-              O seu nome
+              Nome da pasta-central (obrigatório)
             </label>
             <input
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="O seu nome"
+              placeholder="Ex.: o seu nome"
               style={{
                 width: "100%",
                 boxSizing: "border-box",
@@ -168,14 +204,15 @@ export function WebDirectoryOnboarding({ onCompleted }: WebDirectoryOnboardingPr
               </button>
               <button
                 type="button"
-                onClick={persistAndClose}
+                onClick={() => void completeBrainStep()}
+                disabled={!brainNameOk}
                 style={{
-                  background: "var(--primary, #3b82f6)",
+                  background: brainNameOk ? "var(--primary, #3b82f6)" : "rgba(59,130,246,0.35)",
                   color: "#fff",
                   border: "none",
                   borderRadius: 8,
                   padding: "10px 20px",
-                  cursor: "pointer",
+                  cursor: brainNameOk ? "pointer" : "not-allowed",
                   fontSize: 14,
                   fontWeight: 600,
                 }}

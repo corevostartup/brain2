@@ -1,5 +1,10 @@
 // ── Vault service: File System Access API + Obsidian wikilink parser ──
 
+import {
+  ensureCentralBrainFolderOnDirectoryHandle,
+  loadCentralBrainNameFromStorage,
+} from "./brain2CentralFolder";
+
 export type VaultNode = {
   id: string;
   label: string;
@@ -75,10 +80,18 @@ export async function saveDirectoryHandle(
   const db = await openDB();
   const tx = db.transaction(STORE_NAME, "readwrite");
   tx.objectStore(STORE_NAME).put(handle, HANDLE_KEY);
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+  const stored = loadCentralBrainNameFromStorage();
+  if (stored?.trim()) {
+    try {
+      await ensureCentralBrainFolderOnDirectoryHandle(handle, stored);
+    } catch {
+      /* não bloquear: o utilizador pode criar a pasta-central depois no Mac ou nas definições */
+    }
+  }
 }
 
 export async function loadDirectoryHandle(): Promise<FileSystemDirectoryHandle | null> {
