@@ -168,9 +168,12 @@ const GROUP_COLORS_DIM: Record<string, string> = {
 const VAULT_NODE_COLOR = "#b8b8b8";
 const VAULT_NODE_COLOR_DIM = "#4a4a4a";
 
-/** Passo 6: destaque ao arrastar — azul tech. */
-const TECH_DRAG_NODE = "#22d3ee";
-const TECH_DRAG_LINK = "rgba(34, 211, 238, 0.78)";
+/** Destaque do nó em foco (arrastar/segurar): azul escuro próximo do roxo. */
+const TECH_DRAG_NODE = "#4338ca";
+const TECH_DRAG_LINK = "rgba(67, 56, 202, 0.82)";
+/** Nós/ligações fora do subgrafo direto: ~80% transparente (α ≈ 0,2). */
+const UNRELATED_NODE_ALPHA = 0.2;
+const UNRELATED_LINK_ALPHA = 0.14 * UNRELATED_NODE_ALPHA;
 
 function rgbFromHex(hex: string): { r: number; g: number; b: number } | null {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
@@ -261,7 +264,11 @@ export default function BrainGraphView({
   const nativeSpreadRecoveryRef = useRef(false);
   const hoverIdRef = useRef<string | null>(null);
   const dragSessionRef = useRef<string | null>(null);
+  const canvasGripRef = useRef(false);
+  const [holdFocusId, setHoldFocusId] = useState<string | null>(null);
   const [dragRootId, setDragRootId] = useState<string | null>(null);
+  /** Segurar no canvas (pointerdown) ou arrastar: quem define o subgrafo “direto”. */
+  const focusRootId = holdFocusId ?? dragRootId;
   const isNativeShell =
     typeof document !== "undefined" &&
     document.documentElement.hasAttribute("data-brain2-native");
@@ -308,12 +315,12 @@ export default function BrainGraphView({
   }, [activeEdges]);
 
   const dragEgoSet = useMemo(() => {
-    if (!dragRootId) return null as Set<string> | null;
-    const s = new Set<string>([dragRootId]);
-    const neigh = adjacency.get(dragRootId);
+    if (!focusRootId) return null as Set<string> | null;
+    const s = new Set<string>([focusRootId]);
+    const neigh = adjacency.get(focusRootId);
     if (neigh) neigh.forEach((id) => s.add(id));
     return s;
-  }, [dragRootId, adjacency]);
+  }, [focusRootId, adjacency]);
 
   const graphData = useMemo((): GraphData<BrainNode, BrainLink> => {
     const baseRadius = Math.max(180, Math.min(dims.w, dims.h) * 0.34);
@@ -366,6 +373,37 @@ export default function BrainGraphView({
     () => `${useVault ? "v" : "m"}-${graphData.nodes.length}-${graphData.links.length}`,
     [useVault, graphData.nodes.length, graphData.links.length]
   );
+
+  useEffect(() => {
+    if (loading) return;
+    const root = containerRef.current;
+    if (!root) return;
+
+    const onPointerDown = (ev: PointerEvent) => {
+      const canvas = root.querySelector("canvas");
+      if (!canvas || ev.target !== canvas) return;
+      const id = hoverIdRef.current;
+      if (!id) return;
+      canvasGripRef.current = true;
+      setHoldFocusId(id);
+    };
+
+    const onPointerUp = () => {
+      if (!canvasGripRef.current) return;
+      canvasGripRef.current = false;
+      window.setTimeout(() => setHoldFocusId(null), 0);
+    };
+
+    root.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerUp, true);
+
+    return () => {
+      root.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+    };
+  }, [loading, graphKey]);
 
   useLayoutEffect(() => {
     if (loading) return;
@@ -663,9 +701,9 @@ export default function BrainGraphView({
       const isVault = node.group === "vault";
       const base = isVault ? VAULT_NODE_COLOR : GROUP_COLORS[node.group] || "#b0b0b0";
 
-      if (dragRootId && dragEgoSet) {
-        if (!dragEgoSet.has(id)) return withAlpha(base, 0.8);
-        if (id === dragRootId) return TECH_DRAG_NODE;
+      if (focusRootId && dragEgoSet) {
+        if (!dragEgoSet.has(id)) return withAlpha(base, UNRELATED_NODE_ALPHA);
+        if (id === focusRootId) return TECH_DRAG_NODE;
         return base;
       }
 
@@ -676,7 +714,7 @@ export default function BrainGraphView({
       if (highlightSet.has(id)) return base;
       return isVault ? VAULT_NODE_COLOR_DIM : GROUP_COLORS_DIM[node.group] || "#484848";
     },
-    [highlightSet, isNativeShell, dragRootId, dragEgoSet]
+    [highlightSet, isNativeShell, focusRootId, dragEgoSet]
   );
 
   const linkColor = useCallback(
@@ -685,15 +723,15 @@ export default function BrainGraphView({
       const b = nodeIdOf(link.target);
       const k = linkKey(a, b);
       const base = "rgba(255,255,255,0.14)";
-      const baseDim = "rgba(255,255,255,0.112)";
+      const baseDim = `rgba(255,255,255,${UNRELATED_LINK_ALPHA})`;
       const hi = "rgba(255,255,255,0.38)";
       const faded = "rgba(255,255,255,0.045)";
 
-      if (dragRootId && dragEgoSet) {
+      if (focusRootId && dragEgoSet) {
         const bothInEgo = dragEgoSet.has(a) && dragEgoSet.has(b);
         if (!bothInEgo) return baseDim;
-        if (a === dragRootId || b === dragRootId) return TECH_DRAG_LINK;
-        return base;
+        if (a === focusRootId || b === focusRootId) return TECH_DRAG_LINK;
+        return baseDim;
       }
 
       if (isNativeShell) {
@@ -702,25 +740,25 @@ export default function BrainGraphView({
       if (highlightLinks.size === 0) return base;
       return highlightLinks.has(k) ? hi : faded;
     },
-    [highlightLinks, isNativeShell, dragRootId, dragEgoSet]
+    [highlightLinks, isNativeShell, focusRootId, dragEgoSet]
   );
 
   const linkWidth = useCallback(
     (link: LinkObject<BrainNode, BrainLink>) => {
       const a = nodeIdOf(link.source);
       const b = nodeIdOf(link.target);
-      if (dragRootId && dragEgoSet) {
+      if (focusRootId && dragEgoSet) {
         const bothInEgo = dragEgoSet.has(a) && dragEgoSet.has(b);
-        if (!bothInEgo) return 0.55;
-        if (a === dragRootId || b === dragRootId) return 1.15;
-        return 0.85;
+        if (!bothInEgo) return 0.45;
+        if (a === focusRootId || b === focusRootId) return 1.15;
+        return 0.45;
       }
       if (isNativeShell) {
         return 0.9;
       }
       return highlightLinks.has(linkKey(a, b)) ? 1.25 : 0.65;
     },
-    [highlightLinks, isNativeShell, dragRootId, dragEgoSet]
+    [highlightLinks, isNativeShell, focusRootId, dragEgoSet]
   );
 
   const nodeCanvasObjectMode = useCallback(() => "after" as const, []);
@@ -738,11 +776,13 @@ export default function BrainGraphView({
 
       const id = String(node.id);
       let fill: string;
-      if (dragRootId && dragEgoSet) {
+      if (focusRootId && dragEgoSet) {
         if (!dragEgoSet.has(id)) {
-          fill = isNativeShell ? "rgba(220, 220, 220, 0.77)" : "rgba(115, 115, 115, 0.58)";
-        } else if (id === dragRootId) {
-          fill = "rgba(34, 211, 238, 0.96)";
+          fill = isNativeShell
+            ? `rgba(220, 220, 220, ${0.96 * UNRELATED_NODE_ALPHA})`
+            : `rgba(115, 115, 115, ${0.72 * UNRELATED_NODE_ALPHA})`;
+        } else if (id === focusRootId) {
+          fill = "rgba(67, 56, 202, 0.96)";
         } else if (isNativeShell) {
           fill = "rgba(220, 220, 220, 0.96)";
         } else if (!highlightSet) {
@@ -769,14 +809,14 @@ export default function BrainGraphView({
       const y = node.y ?? 0;
       ctx.fillText(truncated, x, y + r + pad);
     },
-    [highlightSet, isNativeShell, dragRootId, dragEgoSet]
+    [highlightSet, isNativeShell, focusRootId, dragEgoSet]
   );
 
   const onNodeHover = useCallback(
     (node: NodeObject<BrainNode> | null) => {
       const id = node?.id != null ? String(node.id) : null;
       hoverIdRef.current = id;
-      if (dragSessionRef.current) return;
+      if (dragSessionRef.current || canvasGripRef.current) return;
       setHoverId(id);
       updateLinkHighlight(id);
     },
@@ -798,6 +838,7 @@ export default function BrainGraphView({
           x: typeof node.x === "number" ? Math.round(node.x) : null,
           y: typeof node.y === "number" ? Math.round(node.y) : null,
         });
+        onOpenConversationFromNode(id, node.name ?? "");
         return;
       }
       emitNativeDebug("brain-node-click-web", {
