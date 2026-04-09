@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import type { ComponentType, MutableRefObject } from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { X, Loader2 } from "lucide-react";
-import type { VaultGraph } from "@/lib/vault";
+import { formatConversationDisplayTitle, type VaultGraph } from "@/lib/vault";
 import { forceCenter, forceX, forceY } from "d3-force-3d";
 import { emitNativeDebug } from "@/lib/nativeDebug";
 import type {
@@ -55,99 +55,6 @@ const PHYSICS = {
   /** Passo 4: molas um pouco mais “moles” (multiplicador na força link). */
   nativeLinkStrengthScale: 0.82,
 };
-
-// ── Mock data ─────────────────────────────────────────────────────────
-const mockNodes = [
-  { id: "brain2", label: "Brain2 Project", group: "project" },
-  { id: "arch", label: "Arquitetura do Sistema", group: "tech" },
-  { id: "roadmap", label: "Roadmap do Produto", group: "project" },
-  { id: "llm", label: "LLM & Modelos de IA", group: "tech" },
-  { id: "rag", label: "RAG Pipeline", group: "tech" },
-  { id: "embeddings", label: "Embeddings Vetoriais", group: "tech" },
-  { id: "onboarding", label: "Onboarding de Usuários", group: "product" },
-  { id: "ux", label: "UX & Design System", group: "product" },
-  { id: "pricing", label: "Modelo de Pricing", group: "business" },
-  { id: "competitors", label: "Análise de Concorrentes", group: "business" },
-  { id: "notion", label: "Notion", group: "business" },
-  { id: "obsidian", label: "Obsidian", group: "business" },
-  { id: "meeting-notes", label: "Notas de Reunião - 02/04", group: "notes" },
-  { id: "meeting-notes-2", label: "Notas de Reunião - 15/03", group: "notes" },
-  { id: "api-design", label: "API Design & Endpoints", group: "tech" },
-  { id: "auth", label: "Autenticação & Auth Flow", group: "tech" },
-  { id: "nextjs", label: "Next.js Frontend", group: "tech" },
-  { id: "swift-ios", label: "Swift iOS App", group: "tech" },
-  { id: "swift-macos", label: "Swift macOS App", group: "tech" },
-  { id: "marketplace", label: "Marketplace de Plugins", group: "product" },
-  { id: "agents", label: "Agentes Autônomos", group: "tech" },
-  { id: "memory", label: "Sistema de Memória", group: "tech" },
-  { id: "graph-view", label: "Graph View Feature", group: "product" },
-  { id: "checklist-launch", label: "Checklist de Lançamento", group: "project" },
-  { id: "investor-deck", label: "Deck para Investidores", group: "business" },
-  { id: "user-research", label: "Pesquisa de Usuários", group: "product" },
-  { id: "data-privacy", label: "Privacidade de Dados", group: "tech" },
-  { id: "sync-engine", label: "Motor de Sincronização", group: "tech" },
-  { id: "search-engine", label: "Motor de Busca Semântica", group: "tech" },
-  { id: "prompt-eng", label: "Prompt Engineering", group: "tech" },
-  { id: "daily-log", label: "Daily Log - Abril", group: "notes" },
-  { id: "ideias-produto", label: "Ideias de Produto", group: "product" },
-];
-
-const mockEdges = [
-  { source: "brain2", target: "arch" },
-  { source: "brain2", target: "roadmap" },
-  { source: "brain2", target: "checklist-launch" },
-  { source: "brain2", target: "investor-deck" },
-  { source: "arch", target: "api-design" },
-  { source: "arch", target: "nextjs" },
-  { source: "arch", target: "swift-ios" },
-  { source: "arch", target: "swift-macos" },
-  { source: "arch", target: "sync-engine" },
-  { source: "arch", target: "auth" },
-  { source: "roadmap", target: "graph-view" },
-  { source: "roadmap", target: "marketplace" },
-  { source: "roadmap", target: "agents" },
-  { source: "roadmap", target: "onboarding" },
-  { source: "llm", target: "rag" },
-  { source: "llm", target: "embeddings" },
-  { source: "llm", target: "agents" },
-  { source: "llm", target: "prompt-eng" },
-  { source: "rag", target: "embeddings" },
-  { source: "rag", target: "search-engine" },
-  { source: "rag", target: "memory" },
-  { source: "embeddings", target: "search-engine" },
-  { source: "onboarding", target: "ux" },
-  { source: "onboarding", target: "user-research" },
-  { source: "ux", target: "nextjs" },
-  { source: "ux", target: "graph-view" },
-  { source: "pricing", target: "competitors" },
-  { source: "pricing", target: "investor-deck" },
-  { source: "competitors", target: "notion" },
-  { source: "competitors", target: "obsidian" },
-  { source: "meeting-notes", target: "roadmap" },
-  { source: "meeting-notes", target: "pricing" },
-  { source: "meeting-notes-2", target: "arch" },
-  { source: "meeting-notes-2", target: "user-research" },
-  { source: "api-design", target: "auth" },
-  { source: "api-design", target: "rag" },
-  { source: "nextjs", target: "swift-ios" },
-  { source: "nextjs", target: "swift-macos" },
-  { source: "swift-ios", target: "sync-engine" },
-  { source: "swift-macos", target: "sync-engine" },
-  { source: "agents", target: "memory" },
-  { source: "agents", target: "prompt-eng" },
-  { source: "memory", target: "sync-engine" },
-  { source: "graph-view", target: "obsidian" },
-  { source: "checklist-launch", target: "meeting-notes" },
-  { source: "investor-deck", target: "competitors" },
-  { source: "data-privacy", target: "auth" },
-  { source: "data-privacy", target: "sync-engine" },
-  { source: "daily-log", target: "meeting-notes" },
-  { source: "daily-log", target: "ideias-produto" },
-  { source: "ideias-produto", target: "marketplace" },
-  { source: "ideias-produto", target: "graph-view" },
-  { source: "user-research", target: "ux" },
-  { source: "search-engine", target: "memory" },
-];
 
 const GROUP_COLORS: Record<string, string> = {
   project: "#c0c0c0",
@@ -273,15 +180,18 @@ export default function BrainGraphView({
     typeof document !== "undefined" &&
     document.documentElement.hasAttribute("data-brain2-native");
 
-  const useVault = graph && graph.nodes.length > 0;
+  const useVault = Boolean(graph && graph.nodes.length > 0);
   const activeNodes = useMemo(
     () =>
-      useVault
+      useVault && graph
         ? graph.nodes.map((n) => ({ id: n.id, label: n.label, group: "vault" }))
-        : mockNodes,
+        : [],
     [useVault, graph]
   );
-  const activeEdges = useMemo(() => (useVault ? graph.edges : mockEdges), [useVault, graph]);
+  const activeEdges = useMemo(
+    () => (useVault && graph ? graph.edges : []),
+    [useVault, graph]
+  );
 
   const degreeMap = useMemo(() => {
     const m: Record<string, number> = {};
@@ -765,7 +675,8 @@ export default function BrainGraphView({
 
   const nodeCanvasObject = useCallback(
     (node: NodeObject<BrainNode>, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const label = (node.name ?? "").trim() || String(node.id ?? "");
+      const rawLabel = (node.name ?? "").trim() || String(node.id ?? "");
+      const label = formatConversationDisplayTitle(rawLabel) || rawLabel;
       const r = Math.sqrt(Math.max(0, node.val || 1)) * NODE_REL_SIZE;
       const k = Math.max(globalScale, 0.04);
       const fontPx = 11 / k;
@@ -911,30 +822,13 @@ export default function BrainGraphView({
           <Loader2 size={24} strokeWidth={1.5} className="spin" />
           <span>Lendo vault...</span>
         </div>
-      ) : (
+      ) : useVault && graph ? (
         <>
           <div className="brain-graph-legend">
-            {useVault ? (
-              <span className="legend-item">
-                <span className="legend-dot" style={{ background: VAULT_NODE_COLOR }} />
-                {graph!.nodes.length} notas &middot; {graph!.edges.length} conexões
-              </span>
-            ) : (
-              Object.entries(GROUP_COLORS).map(([group, color]) => (
-                <span key={group} className="legend-item">
-                  <span className="legend-dot" style={{ background: color }} />
-                  {group === "project"
-                    ? "Projeto"
-                    : group === "tech"
-                      ? "Tecnologia"
-                      : group === "product"
-                        ? "Produto"
-                        : group === "business"
-                          ? "Negócio"
-                          : "Notas"}
-                </span>
-              ))
-            )}
+            <span className="legend-item">
+              <span className="legend-dot" style={{ background: VAULT_NODE_COLOR }} />
+              {graph.nodes.length} notas &middot; {graph.edges.length} conexões
+            </span>
           </div>
 
           <div ref={containerRef} className="brain-graph-container">
@@ -978,6 +872,10 @@ export default function BrainGraphView({
             />
           </div>
         </>
+      ) : (
+        <div ref={containerRef} className="brain-graph-container brain-graph-empty">
+          <p className="brain-graph-empty-msg">Nenhuma nota no vault para desenhar o grafo.</p>
+        </div>
       )}
 
       <style jsx>{`
@@ -1054,6 +952,23 @@ export default function BrainGraphView({
           min-width: 0;
           min-height: 0;
           cursor: grab;
+        }
+
+        .brain-graph-empty {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: default;
+        }
+
+        .brain-graph-empty-msg {
+          margin: 0;
+          max-width: 280px;
+          text-align: center;
+          font-family: "Inter", sans-serif;
+          font-size: 12px;
+          line-height: 1.45;
+          color: var(--muted);
         }
 
         .brain-graph-container :global(canvas) {

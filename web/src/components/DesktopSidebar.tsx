@@ -26,7 +26,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import type { FolderTreeNode, VaultConversation } from "@/lib/vault";
+import { formatConversationDisplayTitle, type FolderTreeNode, type VaultConversation } from "@/lib/vault";
 
 const HIDDEN_ROOT_FOLDERS = new Set(["Brain2Memories"]);
 
@@ -882,7 +882,7 @@ export default function DesktopSidebar({
                     aria-pressed={selectedConversationId === conversation.id}
                   >
                     <MessageSquare size={13} strokeWidth={1.8} />
-                    <span>{conversation.title}</span>
+                    <span>{formatConversationDisplayTitle(conversation.title) || conversation.title}</span>
                     <small className="conversation-meta">{formatModifiedDate(conversation.modifiedAt)}</small>
                   </button>
                 )}
@@ -1028,7 +1028,7 @@ export default function DesktopSidebar({
           <div
             className="folder-context-menu"
             role="menu"
-            aria-label={`Ações da conversa ${conversationContextMenu.title}`}
+            aria-label={`Ações da conversa ${formatConversationDisplayTitle(conversationContextMenu.title) || conversationContextMenu.title}`}
             style={{ left: `${conversationContextMenu.x}px`, top: `${conversationContextMenu.y}px` }}
           >
             <button

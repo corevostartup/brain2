@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Volume2, X } from "lucide-react";
-import type { VaultConversation } from "@/lib/vault";
+import { formatConversationDisplayTitle, type VaultConversation } from "@/lib/vault";
 
 type ConversationMessage = {
   id: string;
@@ -14,11 +14,6 @@ type ConversationViewProps = {
   conversation: VaultConversation;
   onClose: () => void;
 };
-
-function formatConversationHeaderTitle(rawTitle: string): string {
-  const withoutMetadata = rawTitle.replace(/\s+-\s*\([^)]*\)\s*$/, "").trim();
-  return withoutMetadata || "Conversa";
-}
 
 function roleFromLabel(label: string): "user" | "assistant" {
   const normalized = label.trim().toLowerCase();
@@ -165,7 +160,7 @@ export default function ConversationView({ conversation, onClose }: Conversation
     [conversation.content]
   );
   const displayTitle = useMemo(
-    () => formatConversationHeaderTitle(conversation.title),
+    () => formatConversationDisplayTitle(conversation.title) || "Conversa",
     [conversation.title]
   );
   const copyTimeoutRef = useRef<number | null>(null);

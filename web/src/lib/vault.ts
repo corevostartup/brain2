@@ -23,6 +23,20 @@ export type VaultConversation = {
   content: string;
 };
 
+/**
+ * Nome apresentável: remove sufixos de ficheiro Brain2 (` - (id)` ou legado `--id`).
+ * Os dados internos (id, path) mantêm o nome completo do ficheiro.
+ */
+export function formatConversationDisplayTitle(raw: string): string {
+  let s = raw.trim();
+  if (!s) {
+    return "";
+  }
+  s = s.replace(/\s+-\s*\([^)]*\)\s*$/u, "").trim();
+  s = s.replace(/\s+--[a-z0-9-]+\s*$/iu, "").trim();
+  return s;
+}
+
 const DB_NAME = "brain2-vault";
 const STORE_NAME = "handles";
 const HANDLE_KEY = "vaultDirHandle";
