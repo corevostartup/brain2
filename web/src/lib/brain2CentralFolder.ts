@@ -6,7 +6,8 @@
  * Isto é o eixo onde as pastas na raiz se ligam ao «cérebro».
  *
  * API preset (vaultServer): ficheiro opcional na raiz do vault `.brain2-central-folder-name`
- * (uma linha = nome da pasta-central) para gravar `[[Nome]]` ao criar pastas irmãs.
+ * (uma linha = nome da pasta-central). O wikilink ao hub só é escrito em `Nome/Nome.md` ao criar
+ * pastas na raiz do vault (irmãs da pasta-central), não em subpastas.
  */
 
 export const BRAIN2_CENTRAL_BRAIN_NAME_KEY = "brain2-central-brain-folder-name";

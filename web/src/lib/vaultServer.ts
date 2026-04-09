@@ -419,8 +419,10 @@ export async function createPresetFolder(parentPath: string, folderName: string)
       }
     }
 
+    // Só na raiz do vault: irmãs da pasta-central ligam ao hub; subpastas (de irmãs ou outras) não.
     const centralHub = await readPresetCentralBrainFolderName();
     if (
+      !normalizedParentPath &&
       centralHub &&
       safeFolderName.localeCompare(centralHub, undefined, { sensitivity: "base" }) !== 0
     ) {

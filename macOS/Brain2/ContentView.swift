@@ -1659,7 +1659,7 @@ struct WebView: NSViewRepresentable {
                     )
                 }
 
-                /// Irmãs no vault: cada `Nome/Nome.md` liga à pasta-central no cabeçalho (`- Correlation: [[PastaCentral]]`, estilo Obsidian).
+                /// Subpastas: só correlação pai↔filho. Na raiz: irmãs da pasta-central ligam ao hub; subpastas de irmãs não.
                 if !normalizedParentPath.isEmpty {
                     let parentFolderName = (normalizedParentPath as NSString).lastPathComponent
                     try ensureMarkdownCorrelationWikilink(fileURL: bootstrapURL, targetWikilinkName: parentFolderName)
@@ -1667,7 +1667,9 @@ struct WebView: NSViewRepresentable {
                     try ensureMarkdownCorrelationWikilink(fileURL: parentCorrURL, targetWikilinkName: safeName)
                 }
 
-                if let hub = centralHubName, !hub.isEmpty, safeName.caseInsensitiveCompare(hub) != .orderedSame {
+                if normalizedParentPath.isEmpty,
+                   let hub = centralHubName, !hub.isEmpty,
+                   safeName.caseInsensitiveCompare(hub) != .orderedSame {
                     try ensureMarkdownCorrelationWikilink(fileURL: bootstrapURL, targetWikilinkName: hub)
                 }
             } catch {
