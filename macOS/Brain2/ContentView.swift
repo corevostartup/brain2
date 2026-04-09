@@ -24,6 +24,7 @@ enum DirectoryOnboardingStep: Equatable {
 @MainActor
 final class DirectoryOnboardingModel: ObservableObject {
     static let userDefaultsKey = "brain2-directory-onboarding-completed"
+    private static let vaultBookmarkDefaultsKey = "brain2-selected-vault-bookmark"
 
     @Published var isPresented = false
     @Published var step: DirectoryOnboardingStep = .chooseDirectory
@@ -35,9 +36,14 @@ final class DirectoryOnboardingModel: ObservableObject {
         UserDefaults.standard.bool(forKey: Self.userDefaultsKey)
     }
 
+    private var hasPersistedVaultBookmark: Bool {
+        UserDefaults.standard.data(forKey: Self.vaultBookmarkDefaultsKey) != nil
+    }
+
+    /// Abre o fluxo: se já existe vault, mostra direto «Ative o seu cérebro» em vez de saltar tudo em silêncio.
     func requestPresentationAfterFirstSuccessfulLogin() {
         guard !hasCompletedOnboarding else { return }
-        step = .chooseDirectory
+        step = hasPersistedVaultBookmark ? .activateBrain : .chooseDirectory
         isPresented = true
     }
 
@@ -180,6 +186,8 @@ struct WebView: NSViewRepresentable {
         /// Evita varios ASWebAuthenticationSession / listeners em paralelo (mensagem "helper application" no macOS).
         private var isGoogleOAuthFlowActive = false
         private var oauthPresentationWindow: NSWindow?
+        /// Garante uma tentativa extra de mostrar o onboarding no Mac mesmo se a web não chamar a bridge (Firebase modular, etc.).
+        private var didScheduleMacOnboardingUnconditionalFallback = false
         private let fileManager = FileManager.default
         private lazy var wikilinkRegex = try? NSRegularExpression(
             pattern: #"\[\[([^\]|#]+?)(?:#[^\]|]*)?(?:\|[^\]]*?)?\]\]"#
@@ -247,6 +255,20 @@ struct WebView: NSViewRepresentable {
             publishPersistedVaultIfAvailable()
             promptRepickIfLegacyPathWithoutBookmark()
             scheduleMacOSOnboardingSessionProbe()
+            scheduleMacOnboardingUnconditionalFallbackIfNeeded()
+        }
+
+        private func scheduleMacOnboardingUnconditionalFallbackIfNeeded() {
+            guard !didScheduleMacOnboardingUnconditionalFallback else { return }
+            didScheduleMacOnboardingUnconditionalFallback = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 9.0) { [weak self] in
+                guard let self, let onboarding = self.directoryOnboarding else { return }
+                guard !onboarding.hasCompletedOnboarding else { return }
+                #if DEBUG
+                NSLog("[Brain2 Onboarding] fallback incondicional: a apresentar folha (web pode não ter chamado a bridge).")
+                #endif
+                onboarding.requestPresentationAfterFirstSuccessfulLogin()
+            }
         }
 
         /// Fallback no macOS: se `webAppSignedIn` não disparar (Firebase modular, etc.), tenta detetar sessão via storages.
@@ -262,10 +284,6 @@ struct WebView: NSViewRepresentable {
             guard let webView else { return }
             guard let onboarding = directoryOnboarding else { return }
             guard !onboarding.hasCompletedOnboarding else { return }
-            guard resolvePersistedVaultURL() == nil else {
-                UserDefaults.standard.set(true, forKey: DirectoryOnboardingModel.userDefaultsKey)
-                return
-            }
 
             let script = """
             (function () {
@@ -641,10 +659,6 @@ struct WebView: NSViewRepresentable {
             }
             guard let onboarding = directoryOnboarding else { return }
             guard !onboarding.hasCompletedOnboarding else { return }
-            if resolvePersistedVaultURL() != nil {
-                UserDefaults.standard.set(true, forKey: DirectoryOnboardingModel.userDefaultsKey)
-                return
-            }
             onboarding.requestPresentationAfterFirstSuccessfulLogin()
         }
 

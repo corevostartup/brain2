@@ -142,7 +142,18 @@ function callNativeFolderMutation(call: () => void): Promise<void> {
   });
 }
 
+/** Shell macOS via query (?brain2-shell=macos) injetado pelo WKWebView — não depender só da bridge (ainda não existe no 1º paint). */
+function detectBrain2MacShellQuery(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return new URLSearchParams(window.location.search).get("brain2-shell") === "macos";
+  } catch {
+    return false;
+  }
+}
+
 function isBrain2NativeAppShell(): boolean {
+  if (detectBrain2MacShellQuery()) return true;
   return isNativeShellBridgeAvailable();
 }
 
@@ -561,7 +572,7 @@ export default function Home() {
     };
   }, []);
 
-  /** macOS shell: pede ao nativo o onboarding de diretório quando a sessão Firebase já está ativa (fiável vs. só localStorage). */
+  /** macOS shell: pede onboarding ao nativo quando a sessão está ativa. Repete às vezes até a bridge existir (corrida inject vs React). */
   useEffect(() => {
     if (typeof window === "undefined" || !isAuthenticated || !isNativeMacShell) {
       return;
@@ -581,6 +592,15 @@ export default function Home() {
     } else {
       window.addEventListener("brain2-native-bridge-ready", requestOnboarding, { once: true });
     }
+    let n = 0;
+    const interval = window.setInterval(() => {
+      n += 1;
+      requestOnboarding();
+      if (n >= 8) window.clearInterval(interval);
+    }, 400);
+    return () => {
+      window.clearInterval(interval);
+    };
   }, [isAuthenticated, isNativeMacShell]);
 
   const selectedConversation = useMemo(
