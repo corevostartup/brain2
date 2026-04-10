@@ -88,11 +88,12 @@ function linkKeyUndirected(a: string, b: string): string {
 }
 
 /**
- * Um nó por ficheiro `.md` (exceto hub Memories). Arestas só entre ficheiros do vault
- * quando o wikilink ou o ANCC `vault_path` aponta para outro ficheiro conhecido.
+ * Um nó por ficheiro `.md`, incluindo hubs do sistema (`Memories/Memories.md`, pasta-central).
+ * Arestas só entre ficheiros do vault quando o wikilink ou o ANCC `vault_path` aponta para outro ficheiro conhecido.
+ * (A lista de conversas na UI continua a filtrar hubs — ver `buildConversationsFromMarkdownFiles` / sidebar.)
  */
 export function buildGraphFromMarkdownFiles(files: VaultMarkdownFile[]): VaultGraph {
-  const usable = files.filter((f) => !isMemoriesHubNotePath(f.path));
+  const usable = files;
 
   const nodes: VaultGraph["nodes"] = usable.map((f) => {
     const id = normalizePathKey(f.path);

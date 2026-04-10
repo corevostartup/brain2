@@ -209,7 +209,7 @@ export async function loadVaultFromGoogleDriveFolder(
   let folders = buildFolderTreeFromMarkdownPaths(markdownFilesForUI.map((f) => f.path));
   folders = filterFolderTreeHidingCentralHubAtRoot(folders, central);
   const conversations = buildConversationsFromMarkdownFiles(markdownFilesForUI);
-  const graph = buildGraphFromMarkdownFiles(markdownFilesForUI);
+  const graph = buildGraphFromMarkdownFiles(markdownFiles);
 
   const pathLabel = displayLabel.trim()
     ? `Google Drive: ${displayLabel.trim()}`

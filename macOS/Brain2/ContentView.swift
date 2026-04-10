@@ -1935,19 +1935,18 @@ struct WebView: NSViewRepresentable {
 
         private func buildVaultPayload(for rootURL: URL) -> [String: Any] {
             let folders = readFolderTree(at: rootURL, vaultRootURL: rootURL)
-            var markdownFiles = readAllMarkdownFiles(at: rootURL)
+            let allMarkdownFiles = readAllMarkdownFiles(at: rootURL)
             let centralName = UserDefaults.standard
                 .string(forKey: Self.centralBrainFolderNameDefaultsKey)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            // Remove só o hub `Nome/Nome.md` do conjunto usado no grafo (evita duplicar o eixo).
-            // `Memories/Memories.md` mantém-se incluído: o Your Brain precisa das wikilinks (ex.: correlação à pasta-central).
-            // A lista de conversas na web continua a ocultar esta nota (DesktopSidebar / filtros).
+            // Grafo Your Brain: inclui `Memories/Memories.md` e `Nome/Nome.md` (hubs). A lista de conversas oculta-os.
+            var markdownFilesForConversations = allMarkdownFiles
             if let c = centralName, !c.isEmpty {
                 let hubPath = "\(c)/\(c).md"
-                markdownFiles.removeAll { $0.path.caseInsensitiveCompare(hubPath) == .orderedSame }
+                markdownFilesForConversations.removeAll { $0.path.caseInsensitiveCompare(hubPath) == .orderedSame }
             }
-            let graph = buildGraph(from: markdownFiles)
-            let conversations = buildConversations(from: markdownFiles)
+            let graph = buildGraph(from: allMarkdownFiles)
+            let conversations = buildConversations(from: markdownFilesForConversations)
 
             var payload: [String: Any] = [
                 "path": rootURL.path,
@@ -2169,10 +2168,9 @@ struct WebView: NSViewRepresentable {
             return nil
         }
 
-        /// Um nó por nota `.md`; arestas só entre conversas quando o wikilink (corpo, sem YAML) ou o ANCC `vault_path` liga a outra nota.
+        /// Um nó por nota `.md` (inclui hubs Memories e pasta-central); arestas quando wikilink ou ANCC `vault_path` liga a outra nota.
         private func buildGraph(from files: [MarkdownFile]) -> [String: Any] {
-            let hubMemories = "\(Self.memoriesFolderName)/\(Self.memoriesNoteFileName)"
-            let usable = files.filter { $0.path.caseInsensitiveCompare(hubMemories) != .orderedSame }
+            let usable = files
 
             let pathSet = Set(usable.map { normalizeGraphPathKey($0.path) })
             var nodes: [[String: String]] = usable.map { f in

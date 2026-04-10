@@ -316,11 +316,11 @@ export async function getPresetVaultData(): Promise<{
   const centralBrainFolderName = await readPresetCentralBrainFolderName();
   const folders = await readFolderTreeFromPath(PRESET_VAULT_PATH, 0, centralBrainFolderName);
   const rawMarkdownFiles = await readAllMarkdownFilesFromPath(PRESET_VAULT_PATH);
-  const markdownFiles = rawMarkdownFiles.filter(
+  const markdownFilesForConversations = rawMarkdownFiles.filter(
     (f) => !isCentralBrainHubMarkdownPath(f.path, centralBrainFolderName),
   );
-  const graph = buildGraphFromMarkdownFiles(markdownFiles);
-  const conversations = buildConversationsFromMarkdownFiles(markdownFiles);
+  const graph = buildGraphFromMarkdownFiles(rawMarkdownFiles);
+  const conversations = buildConversationsFromMarkdownFiles(markdownFilesForConversations);
 
   return {
     path: PRESET_VAULT_PATH,
