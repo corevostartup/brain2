@@ -110,6 +110,8 @@ type BrainGraphViewProps = {
   compactChrome?: boolean;
   /** O painel pai pode fornecir o botão fechar. */
   hideCloseButton?: boolean;
+  spectatorLockZoom?: boolean;
+  liveAudioEnergy?: number;
 };
 
 type BrainNode = {
@@ -174,9 +176,12 @@ export default function BrainGraphView({
   liveSpeechPulsePhase = 0,
   compactChrome = false,
   hideCloseButton = false,
+  spectatorLockZoom = false,
+  liveAudioEnergy,
 }: BrainGraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
+  const liveAudioEnergyRef = useRef(0);
 
   const [dims, setDims] = useState({ w: 640, h: 480 });
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -195,6 +200,10 @@ export default function BrainGraphView({
   const isNativeShell =
     typeof document !== "undefined" &&
     document.documentElement.hasAttribute("data-brain2-native");
+
+  useEffect(() => {
+    liveAudioEnergyRef.current = Math.max(0, Math.min(1, liveAudioEnergy ?? 0));
+  }, [liveAudioEnergy]);
 
   const useVault = Boolean(graph && graph.nodes.length > 0);
   const activeNodes = useMemo(
@@ -453,6 +462,38 @@ export default function BrainGraphView({
       cancelled = true;
     };
   }, [graphData, graphKey, dims.w, dims.h, isNativeShell, useVault]);
+
+  /** Movimento “orgânico” do grafo em função do nível de áudio (conversa avançada). */
+  useEffect(() => {
+    if (variant !== "spectator" || !useVault || loading) {
+      return;
+    }
+    let raf = 0;
+    const t0 = performance.now();
+    const tick = () => {
+      const fg = fgRef.current;
+      const e = liveAudioEnergyRef.current;
+      const t = (performance.now() - t0) / 1000;
+      if (fg) {
+        const baseCharge = isNativeShell && useVault ? PHYSICS.nativeChargeStrength : PHYSICS.chargeStrength;
+        const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void };
+        charge?.strength?.(baseCharge * (1 + e * 0.82));
+
+        const drift = e * 24;
+        const cx = Math.sin(t * 1.12 + e * 2.4) * drift;
+        const cy = Math.cos(t * 0.96 + e * 1.9) * drift;
+        const cStr =
+          (isNativeShell && useVault ? PHYSICS.nativeCenterStrength : PHYSICS.centerStrength) *
+          (0.55 + e * 0.55);
+        fg.d3Force("center", forceCenter(cx, cy, 0).strength(cStr));
+
+        fg.d3ReheatSimulation();
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [variant, useVault, loading, graphKey, isNativeShell]);
 
   useEffect(() => {
     nativeSpreadRecoveryRef.current = false;
@@ -949,7 +990,7 @@ export default function BrainGraphView({
               warmupTicks={PHYSICS.warmupTicks}
               cooldownTime={isNativeShell && useVault ? PHYSICS.nativeCooldownMs : PHYSICS.cooldownMs}
               enableNodeDrag={variant !== "spectator"}
-              enableZoomInteraction
+              enableZoomInteraction={!(variant === "spectator" && spectatorLockZoom)}
               enablePanInteraction
               minZoom={0.12}
               maxZoom={8}

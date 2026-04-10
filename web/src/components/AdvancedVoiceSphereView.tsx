@@ -7,7 +7,6 @@ import { X, Mic, MicOff } from "lucide-react";
 import * as THREE from "three";
 import BrainGraphView from "@/components/BrainGraphView";
 import type { VaultGraph } from "@/lib/vault";
-import { computeLiveSpeechHighlights } from "@/lib/liveSpeechBrainHighlight";
 
 type AdvancedVoiceSphereViewProps = {
   onClose: () => void;
@@ -201,25 +200,14 @@ export default function AdvancedVoiceSphereView({
   vaultGraphLoading = false,
 }: AdvancedVoiceSphereViewProps) {
   const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
-  const [finalTranscript, setFinalTranscript] = useState("");
-  const [interimTranscript, setInterimTranscript] = useState("");
-  const [speechError, setSpeechError] = useState<string | null>(null);
-  const [livePulsePhase, setLivePulsePhase] = useState(0);
-
-  const combinedTranscript = useMemo(
-    () => [finalTranscript, interimTranscript].filter(Boolean).join(" ").trim(),
-    [finalTranscript, interimTranscript]
-  );
-
-  const { nodeStrength, linkKeys } = useMemo(
-    () => computeLiveSpeechHighlights(combinedTranscript, vaultGraph ?? null),
-    [combinedTranscript, vaultGraph]
-  );
+  const [micLevel, setMicLevel] = useState(0);
+  const [micStatus, setMicStatus] = useState<"idle" | "listening" | "denied" | "unsupported">("idle");
+  const smoothRef = useRef(0);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
-    const syncTheme = () => {
-      setThemeMode(resolveThemeMode());
-    };
+    const syncTheme = () => setThemeMode(resolveThemeMode());
     syncTheme();
     const observer = new MutationObserver(syncTheme);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
@@ -230,101 +218,79 @@ export default function AdvancedVoiceSphereView({
   }, []);
 
   useEffect(() => {
-    let raf = 0;
-    let last = 0;
-    const loop = (t: number) => {
-      if (t - last > 28) {
-        last = t;
-        setLivePulsePhase((p) => p + 0.09);
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const W = window as Window & {
-      SpeechRecognition?: new () => unknown;
-      webkitSpeechRecognition?: new () => unknown;
-    };
-    const SR = W.SpeechRecognition ?? W.webkitSpeechRecognition;
-    if (!SR) {
-      setSpeechError("unsupported");
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setMicStatus("unsupported");
       return;
     }
 
     let cancelled = false;
-    let fatalSpeech = false;
-    const recognition = new SR() as {
-      continuous: boolean;
-      interimResults: boolean;
-      lang: string;
-      start: () => void;
-      stop: () => void;
-      abort: () => void;
-      onresult: ((ev: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
-      onerror: ((ev: { error: string }) => void) | null;
-      onend: (() => void) | null;
-    };
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "pt-BR";
+    let raf = 0;
+    const buf = new Uint8Array(2048);
 
-    recognition.onresult = (event) => {
-      let interim = "";
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const piece = event.results[i][0]?.transcript ?? "";
-        if (event.results[i].isFinal) {
-          setFinalTranscript((prev) => `${prev} ${piece}`.trim());
-        } else {
-          interim += piece;
-        }
-      }
-      setInterimTranscript(interim.trim());
-    };
-
-    recognition.onerror = (ev) => {
-      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
-        fatalSpeech = true;
-        setSpeechError("permission");
-      } else if (ev.error !== "no-speech" && ev.error !== "aborted") {
-        setSpeechError(ev.error);
-      }
-    };
-
-    recognition.onend = () => {
-      if (cancelled || fatalSpeech) return;
+    void (async () => {
       try {
-        recognition.start();
-      } catch {
-        /* já activo */
-      }
-    };
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        const ctx = new AudioContext();
+        audioCtxRef.current = ctx;
+        if (ctx.state === "suspended") {
+          await ctx.resume();
+        }
+        const src = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.65;
+        src.connect(analyser);
+        setMicStatus("listening");
 
-    try {
-      recognition.start();
-    } catch {
-      setSpeechError("start-failed");
-    }
+        let frame = 0;
+        const loop = () => {
+          if (cancelled) return;
+          analyser.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i += 1) {
+            const v = (buf[i]! - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / buf.length);
+          const instant = Math.min(1, rms * 3.2);
+          smoothRef.current = smoothRef.current * 0.82 + instant * 0.18;
+          frame += 1;
+          if (frame % 2 === 0) {
+            setMicLevel(smoothRef.current);
+          }
+          raf = requestAnimationFrame(loop);
+        };
+        raf = requestAnimationFrame(loop);
+      } catch {
+        setMicStatus("denied");
+      }
+    })();
 
     return () => {
       cancelled = true;
-      try {
-        recognition.stop();
-        recognition.abort();
-      } catch {
-        /* ignore */
-      }
+      cancelAnimationFrame(raf);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      void audioCtxRef.current?.close();
+      audioCtxRef.current = null;
     };
   }, []);
 
   const noop = useCallback(() => {}, []);
 
   const palette = themeMode === "light" ? LIGHT_PALETTE : DARK_PALETTE;
+
+  const micLabel = useMemo(() => {
+    if (micStatus === "unsupported") return "Microfone não disponível neste browser.";
+    if (micStatus === "denied") return "Permissão do microfone necessária para animar o grafo.";
+    if (micStatus === "idle") return "A preparar áudio…";
+    return "À escuta — o Your Brain reage ao som.";
+  }, [micStatus]);
 
   return (
     <div className={`advanced-voice-root advanced-voice-root--${themeMode}`}>
@@ -349,64 +315,29 @@ export default function AdvancedVoiceSphereView({
         <X size={16} strokeWidth={2} />
       </button>
 
-      <div className="advanced-voice-center-orb">
-        <div className="advanced-voice-glass-ring" aria-hidden />
-        <div className="advanced-voice-brain-host">
-          <BrainGraphView
-            onClose={noop}
-            graph={vaultGraph ?? null}
-            loading={vaultGraphLoading}
-            variant="spectator"
-            compactChrome
-            hideCloseButton
-            liveSpeechNodeStrength={nodeStrength}
-            liveSpeechLinkKeys={linkKeys}
-            liveSpeechPulsePhase={livePulsePhase}
-          />
-        </div>
+      <div className="advanced-voice-brain-layer">
+        <BrainGraphView
+          onClose={noop}
+          graph={vaultGraph ?? null}
+          loading={vaultGraphLoading}
+          variant="spectator"
+          compactChrome
+          hideCloseButton
+          spectatorLockZoom
+          liveAudioEnergy={micLevel}
+        />
       </div>
 
-      <div className="advanced-voice-transcript-wrap">
-        <div className="advanced-voice-transcript-head">
-          {speechError === "unsupported" ? (
-            <MicOff size={14} strokeWidth={2} aria-hidden />
-          ) : (
-            <Mic size={14} strokeWidth={2} aria-hidden />
-          )}
-          <span>Transcrição ao vivo</span>
-        </div>
-        <div className="advanced-voice-transcript-body" role="log" aria-live="polite">
-          {speechError === "unsupported" ? (
-            <p className="advanced-voice-transcript-hint">
-              O navegador não suporta reconhecimento de voz neste dispositivo. O Your Brain continua visível em modo leitura.
-            </p>
-          ) : null}
-          {speechError === "permission" ? (
-            <p className="advanced-voice-transcript-hint">Permita o microfone para ver a transcrição e as correlações em tempo real.</p>
-          ) : null}
-          {speechError && speechError !== "unsupported" && speechError !== "permission" ? (
-            <p className="advanced-voice-transcript-hint">Voz: {speechError}</p>
-          ) : null}
-          {!speechError || speechError === "no-speech" ? (
-            <p className="advanced-voice-transcript-text">
-              {combinedTranscript ? (
-                <>
-                  {finalTranscript}
-                  {interimTranscript ? (
-                    <>
-                      {" "}
-                      <span className="advanced-voice-interim">{interimTranscript}</span>
-                    </>
-                  ) : null}
-                </>
-              ) : (
-                <span className="advanced-voice-placeholder">
-                  Fale naturalmente — o modelo Your Brain reage quando as tuas palavras encontram notas no vault.
-                </span>
-              )}
-            </p>
-          ) : null}
-        </div>
+      <div className="advanced-voice-mic-bar" aria-live="polite">
+        {micStatus === "denied" || micStatus === "unsupported" ? (
+          <MicOff size={14} strokeWidth={2} aria-hidden />
+        ) : (
+          <Mic size={14} strokeWidth={2} aria-hidden />
+        )}
+        <span>{micLabel}</span>
+        {micStatus === "listening" ? (
+          <span className="advanced-voice-mic-meter" style={{ transform: `scaleX(${0.08 + micLevel * 0.92})` }} />
+        ) : null}
       </div>
 
       <style jsx>{`
@@ -454,165 +385,54 @@ export default function AdvancedVoiceSphereView({
           transform: scale(1.03);
         }
 
-        .advanced-voice-center-orb {
+        .advanced-voice-brain-layer {
           position: absolute;
-          left: 50%;
-          top: 48%;
-          transform: translate(-50%, -50%);
+          inset: 0;
           z-index: 10;
-          width: min(78vmin, 640px);
-          height: min(78vmin, 640px);
-          pointer-events: none;
-        }
-
-        .advanced-voice-glass-ring {
-          position: absolute;
-          inset: -3px;
-          border-radius: 50%;
-          background: conic-gradient(
-            from 210deg,
-            hsla(185, 85%, 58%, 0.35),
-            hsla(275, 72%, 52%, 0.28),
-            hsla(185, 85%, 58%, 0.35)
-          );
-          opacity: 0.85;
-          filter: blur(0.5px);
-          animation: advanced-voice-orbit-glow 10s linear infinite;
-        }
-
-        @keyframes advanced-voice-orbit-glow {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-
-        .advanced-voice-brain-host {
-          position: absolute;
-          inset: 10px;
-          border-radius: 50%;
-          overflow: hidden;
           pointer-events: auto;
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          background: rgba(8, 9, 12, 0.35);
-          backdrop-filter: blur(18px);
-          box-shadow:
-            0 0 0 1px rgba(255, 255, 255, 0.06) inset,
-            0 24px 80px rgba(0, 0, 0, 0.45),
-            0 0 120px rgba(120, 160, 255, 0.08);
+          background: transparent;
         }
 
-        .advanced-voice-root--light .advanced-voice-brain-host {
-          background: rgba(255, 255, 255, 0.42);
-          border-color: rgba(0, 0, 0, 0.08);
-          box-shadow:
-            0 0 0 1px rgba(0, 0, 0, 0.04) inset,
-            0 20px 60px rgba(0, 0, 0, 0.08);
-        }
-
-        .advanced-voice-brain-host :global(.brain-graph-root) {
+        .advanced-voice-brain-layer :global(.brain-graph-root) {
           height: 100%;
+          background: transparent;
         }
 
-        .advanced-voice-transcript-wrap {
+        .advanced-voice-mic-bar {
           position: absolute;
           left: 50%;
-          bottom: clamp(16px, 4vh, 36px);
+          bottom: clamp(14px, 3vh, 28px);
           transform: translateX(-50%);
-          z-index: 20;
-          width: min(720px, calc(100% - 32px));
+          z-index: 30;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          max-width: min(560px, calc(100% - 28px));
+          padding: 8px 14px;
+          border-radius: 999px;
+          border: 1px solid var(--bar-border);
+          background: rgba(10, 11, 14, 0.42);
+          color: rgba(198, 204, 216, 0.88);
+          font-family: "Inter", sans-serif;
+          font-size: 11px;
+          letter-spacing: 0.04em;
+          backdrop-filter: blur(12px);
           pointer-events: none;
         }
 
-        .advanced-voice-transcript-head {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          padding: 6px 12px;
+        .advanced-voice-root--light .advanced-voice-mic-bar {
+          background: rgba(255, 255, 255, 0.55);
+          color: rgba(52, 58, 68, 0.9);
+        }
+
+        .advanced-voice-mic-meter {
+          margin-left: 4px;
+          height: 4px;
+          width: 72px;
           border-radius: 999px;
-          background: rgba(10, 11, 14, 0.55);
-          border: 1px solid var(--bar-border);
-          color: rgba(200, 206, 218, 0.82);
-          font-family: "Inter", sans-serif;
-          font-size: 10px;
-          letter-spacing: 0.14em;
-          text-transform: uppercase;
-          margin-bottom: 10px;
-          backdrop-filter: blur(14px);
-        }
-
-        .advanced-voice-root--light .advanced-voice-transcript-head {
-          background: rgba(255, 255, 255, 0.65);
-          color: rgba(60, 66, 76, 0.88);
-        }
-
-        .advanced-voice-transcript-body {
-          padding: 14px 18px;
-          border-radius: 16px;
-          background: rgba(9, 10, 13, 0.62);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          backdrop-filter: blur(16px);
-          min-height: 72px;
-          max-height: min(28vh, 200px);
-          overflow-y: auto;
-          box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
-        }
-
-        .advanced-voice-root--light .advanced-voice-transcript-body {
-          background: rgba(255, 255, 255, 0.72);
-          border-color: rgba(0, 0, 0, 0.06);
-        }
-
-        .advanced-voice-transcript-text {
-          margin: 0;
-          font-family: "Inter", sans-serif;
-          font-size: clamp(0.78rem, 1.35vw, 0.92rem);
-          line-height: 1.55;
-          color: rgba(220, 226, 236, 0.92);
-        }
-
-        .advanced-voice-root--light .advanced-voice-transcript-text {
-          color: rgba(40, 44, 52, 0.92);
-        }
-
-        .advanced-voice-interim {
-          color: rgba(160, 200, 255, 0.85);
-          font-style: italic;
-        }
-
-        .advanced-voice-root--light .advanced-voice-interim {
-          color: rgba(80, 110, 180, 0.9);
-        }
-
-        .advanced-voice-placeholder {
-          color: rgba(170, 178, 192, 0.65);
-        }
-
-        .advanced-voice-root--light .advanced-voice-placeholder {
-          color: rgba(90, 96, 108, 0.72);
-        }
-
-        .advanced-voice-transcript-hint {
-          margin: 0;
-          font-size: 0.78rem;
-          line-height: 1.45;
-          color: rgba(230, 186, 120, 0.92);
-        }
-
-        @media (max-width: 640px) {
-          .advanced-voice-center-orb {
-            width: min(92vmin, 100%);
-            height: min(72vmin, 420px);
-            top: 44%;
-          }
-
-          .advanced-voice-brain-host {
-            border-radius: 22px;
-          }
-
-          .advanced-voice-glass-ring {
-            border-radius: 26px;
-            inset: -2px;
-          }
+          background: linear-gradient(90deg, rgba(120, 200, 255, 0.35), rgba(180, 140, 255, 0.55));
+          transform-origin: left center;
+          transition: transform 0.08s ease-out;
         }
       `}</style>
     </div>
