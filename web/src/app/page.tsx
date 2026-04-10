@@ -56,6 +56,15 @@ import {
 import { emitNativeDebug, isNativeShellBridgeAvailable } from "@/lib/nativeDebug";
 import { requestGoogleDriveAccessToken } from "@/lib/googleDrive";
 import { loadVaultFromGoogleDriveFolder } from "@/lib/googleDriveVault";
+import {
+  processInteraction,
+  createDefaultANCCSession,
+  type ANCCProcessResult,
+} from "@/ancc";
+import { BRAIN2_BASE_SYSTEM_PROMPT } from "@/lib/brain2SystemPrompt";
+import { buildVaultSnapshotsForAncc } from "@/lib/anccVaultSnapshots";
+import { buildAnccRecentBullets } from "@/lib/anccRecentContext";
+import { buildVaultConversationMarkdown } from "@/lib/vaultConversationMarkdown";
 
 type PresetVaultResponse = {
   path: string;
@@ -189,10 +198,6 @@ function isBrain2NativeAppShell(): boolean {
 }
 
 
-function toIsoDate(timestamp: number): string {
-  return new Date(timestamp).toISOString();
-}
-
 function buildChatTitle(messages: ChatMessage[]): string {
   const firstUser = messages.find((message) => message.role === "user");
   if (!firstUser) {
@@ -203,40 +208,6 @@ function buildChatTitle(messages: ChatMessage[]): string {
     return "Brain2 Conversation";
   }
   return compact.length > 72 ? `${compact.slice(0, 72)}...` : compact;
-}
-
-function buildChatMarkdown(params: {
-  title: string;
-  startedAt: number;
-  model: string;
-  messages: ChatMessage[];
-}): string {
-  const lines: string[] = [];
-  lines.push(`# ${params.title}`);
-  lines.push("");
-  lines.push(`- Created: ${toIsoDate(params.startedAt)}`);
-  lines.push(`- Updated: ${toIsoDate(Date.now())}`);
-  lines.push(`- Model: ${params.model}`);
-  lines.push("");
-
-  let nonSystemIndex = 0;
-  for (const message of params.messages) {
-    if (message.role === "system") {
-      continue;
-    }
-
-    const roleLabel = message.role === "user" ? "User" : "Brain2";
-    const fallbackTimestamp = params.startedAt + nonSystemIndex * 1000;
-    const messageTimestamp = message.createdAt ?? fallbackTimestamp;
-
-    lines.push(`## ${roleLabel} — ${toIsoDate(messageTimestamp)}`);
-    lines.push("");
-    lines.push(message.content.trim());
-    lines.push("");
-    nonSystemIndex += 1;
-  }
-
-  return lines.join("\n").trimEnd() + "\n";
 }
 
 function sanitizeFileName(raw: string): string {
@@ -465,6 +436,8 @@ export default function Home() {
   const [chatSessionStartedAt, setChatSessionStartedAt] = useState<number | null>(null);
   const [chatSessionFolderPath, setChatSessionFolderPath] = useState<string | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  /** Estado ANCC (plasticidade + recorrência) por sessão de chat no browser. */
+  const anccSessionRef = useRef(createDefaultANCCSession());
   const [isNativeMacShell, setIsNativeMacShell] = useState(() =>
     typeof window !== "undefined" && isBrain2NativeAppShell(),
   );
@@ -1303,21 +1276,27 @@ export default function Home() {
     model: string;
     messages: ChatMessage[];
     folderPath?: string | null;
+    /** Último resultado ANCC deste envio (correlações + relevâncias para o frontmatter). */
+    anccResult?: ANCCProcessResult | null;
   }) => {
     const title = buildChatTitle(params.messages);
-    const markdown = buildChatMarkdown({
-      title,
-      startedAt: params.startedAt,
-      model: params.model,
-      messages: params.messages,
-    });
-
     const conversationRecordId = `${params.sessionId}-${params.startedAt}`;
     const safeConversationID = sanitizeFileName(conversationRecordId);
     const formattedTitle = formatConversationFileTitle(title);
     const normalizedFolderPath = normalizeFolderPath(params.folderPath);
     const targetFolderPath = normalizedFolderPath ?? VAULT_LOOSE_MEMORIES_FOLDER_NAME;
     const memoryPath = `${targetFolderPath}/${formattedTitle} - (${safeConversationID}).md`;
+
+    const markdown = buildVaultConversationMarkdown({
+      title,
+      startedAt: params.startedAt,
+      model: params.model,
+      messages: params.messages,
+      anccPersist:
+        params.anccResult && memoryPath
+          ? { result: params.anccResult, currentVaultPath: memoryPath }
+          : undefined,
+    });
     const optimisticConversation: VaultConversation = {
       id: memoryPath.toLowerCase(),
       title,
@@ -1397,7 +1376,33 @@ export default function Home() {
     setReturnToYourBrainOnConversationClose(false);
     setChatLoading(true);
 
+    let anccForPersist: ANCCProcessResult | null = null;
+
     try {
+      const vaultFiles = buildVaultSnapshotsForAncc(vaultConversations);
+      const anccResult = processInteraction({
+        userMessage: payload.content,
+        vaultFiles,
+        plasticityState: anccSessionRef.current.plasticity,
+        recurrenceTracker: anccSessionRef.current.recurrence,
+        recentBullets: buildAnccRecentBullets(chatMessages),
+      });
+      anccForPersist = anccResult;
+
+      const systemContent = `${BRAIN2_BASE_SYSTEM_PROMPT}\n\n${anccResult.hiddenSystemBlock}`;
+      const priorForApi = chatMessages.filter((m) => m.role !== "system");
+      const apiMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+        { role: "system", content: systemContent },
+        ...priorForApi.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+        {
+          role: "user",
+          content: userMessage.content,
+        },
+      ];
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -1406,10 +1411,7 @@ export default function Home() {
         body: JSON.stringify({
           model: payload.model,
           apiKey: payload.apiKey,
-          messages: requestMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
+          messages: apiMessages,
         }),
       });
 
@@ -1439,6 +1441,7 @@ export default function Home() {
         model: payload.model,
         messages: nextMessages,
         folderPath: targetFolderPathForConversation,
+        anccResult: anccForPersist,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro inesperado ao gerar resposta.";
@@ -1451,6 +1454,7 @@ export default function Home() {
         model: payload.model,
         messages: requestMessages,
         folderPath: targetFolderPathForConversation,
+        anccResult: anccForPersist,
       });
     } finally {
       setChatLoading(false);
@@ -1463,6 +1467,7 @@ export default function Home() {
     createMessageId,
     persistChatConversation,
     selectedFolderPath,
+    vaultConversations,
   ]);
 
   const handleNewConversation = useCallback(() => {
@@ -1478,6 +1483,7 @@ export default function Home() {
     setChatSessionStartedAt(null);
     setChatSessionFolderPath(null);
     setIsChatOpen(true);
+    anccSessionRef.current = createDefaultANCCSession();
   }, []);
 
   const handleLogin = useCallback(async () => {
