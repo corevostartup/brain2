@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Float } from "@react-three/drei";
 import { X, Mic, MicOff } from "lucide-react";
 import * as THREE from "three";
 import BrainGraphView from "@/components/BrainGraphView";
@@ -14,53 +13,27 @@ type AdvancedVoiceSphereViewProps = {
   vaultGraphLoading?: boolean;
 };
 
-type WaveBarProps = {
-  index: number;
-  total: number;
-  radius: number;
-  color: string;
-  emissive: string;
-};
-
 type ThemeMode = "dark" | "light";
 
 type ScenePalette = {
   fogColor: string;
   primaryLightColor: string;
   secondaryLightColor: string;
-  coreColor: string;
-  coreEmissive: string;
-  shellColor: string;
   particleColor: string;
-  barColor: string;
-  barEmissive: string;
 };
-
-const BAR_COUNT = 30;
-const ADVANCED_VOICE_CLUSTER_SCALE = 0.5;
 
 const DARK_PALETTE: ScenePalette = {
   fogColor: "#0c0d10",
   primaryLightColor: "#d0d5e1",
   secondaryLightColor: "#656c7b",
-  coreColor: "#c7ccd6",
-  coreEmissive: "#555d6c",
-  shellColor: "#d5dae4",
   particleColor: "#c9cfda",
-  barColor: "#d0d4dd",
-  barEmissive: "#585f6d",
 };
 
 const LIGHT_PALETTE: ScenePalette = {
   fogColor: "#eeeff2",
   primaryLightColor: "#fefefe",
   secondaryLightColor: "#8f97a6",
-  coreColor: "#525965",
-  coreEmissive: "#232833",
-  shellColor: "#69717f",
   particleColor: "#6f7684",
-  barColor: "#454c58",
-  barEmissive: "#252b36",
 };
 
 function resolveThemeMode(): ThemeMode {
@@ -77,48 +50,7 @@ function pseudoRandom(seed: number): number {
   return x - Math.floor(x);
 }
 
-function OrganicCore({ color, emissive }: { color: string; emissive: string }) {
-  const meshRef = useRef<THREE.Mesh>(null);
-
-  useFrame((_state, delta) => {
-    if (!meshRef.current) return;
-    meshRef.current.rotation.y += delta * 0.26;
-    meshRef.current.rotation.x += delta * 0.08;
-  });
-
-  return (
-    <mesh ref={meshRef} castShadow receiveShadow>
-      <icosahedronGeometry args={[0.84, 64]} />
-      <meshStandardMaterial
-        color={color}
-        emissive={emissive}
-        emissiveIntensity={0.62}
-        roughness={0.18}
-        metalness={0.46}
-      />
-    </mesh>
-  );
-}
-
-function PulseShell({ color }: { color: string }) {
-  const shellRef = useRef<THREE.Mesh>(null);
-
-  useFrame((state) => {
-    if (!shellRef.current) return;
-    const t = state.clock.elapsedTime;
-    const scale = 1.42 + Math.sin(t * 1.65) * 0.05;
-    shellRef.current.scale.setScalar(scale);
-    shellRef.current.rotation.y = t * 0.07;
-  });
-
-  return (
-    <mesh ref={shellRef}>
-      <icosahedronGeometry args={[0.9, 2]} />
-      <meshBasicMaterial color={color} transparent opacity={0.12} wireframe />
-    </mesh>
-  );
-}
-
+/** Partículas em esfera — único elemento 3D de fundo (esferas flutuantes). */
 function ParticleHalo({ color }: { color: string }) {
   const pointsRef = useRef<THREE.Points>(null);
 
@@ -156,41 +88,6 @@ function ParticleHalo({ color }: { color: string }) {
       </bufferGeometry>
       <pointsMaterial color={color} size={0.014} sizeAttenuation transparent opacity={0.34} depthWrite={false} />
     </points>
-  );
-}
-
-function WaveBar({ index, total, radius, color, emissive }: WaveBarProps) {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const angle = (index / total) * Math.PI * 2;
-  const x = Math.cos(angle) * radius;
-  const z = Math.sin(angle) * radius;
-
-  useFrame((state) => {
-    if (!meshRef.current) return;
-    const t = state.clock.elapsedTime;
-    const pulse = Math.sin(t * 2.8 + index * 0.52) * 0.5 + 0.5;
-    const altitude = Math.sin(t * 1.35 + index * 0.28) * 0.5 + 0.5;
-    const scaleY = 0.32 + pulse * 1.05;
-
-    meshRef.current.scale.y = scaleY;
-    meshRef.current.position.y = -0.16 + scaleY * 0.11 + altitude * 0.04;
-  });
-
-  return (
-    <mesh ref={meshRef} position={[x, -0.08, z]} rotation={[0, -angle, 0]}>
-      <boxGeometry args={[0.03, 0.36, 0.03]} />
-      <meshStandardMaterial color={color} emissive={emissive} emissiveIntensity={0.34} roughness={0.44} metalness={0.26} />
-    </mesh>
-  );
-}
-
-function WaveRing({ color, emissive }: { color: string; emissive: string }) {
-  return (
-    <group>
-      {Array.from({ length: BAR_COUNT }, (_, index) => (
-        <WaveBar key={index} index={index} total={BAR_COUNT} radius={1.72} color={color} emissive={emissive} />
-      ))}
-    </group>
   );
 }
 
@@ -243,7 +140,7 @@ export default function AdvancedVoiceSphereView({
         const src = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 2048;
-        analyser.smoothingTimeConstant = 0.65;
+        analyser.smoothingTimeConstant = 0.82;
         src.connect(analyser);
         setMicStatus("listening");
 
@@ -258,7 +155,7 @@ export default function AdvancedVoiceSphereView({
           }
           const rms = Math.sqrt(sum / buf.length);
           const instant = Math.min(1, rms * 3.2);
-          smoothRef.current = smoothRef.current * 0.82 + instant * 0.18;
+          smoothRef.current = smoothRef.current * 0.91 + instant * 0.09;
           frame += 1;
           if (frame % 2 === 0) {
             setMicLevel(smoothRef.current);
@@ -292,6 +189,17 @@ export default function AdvancedVoiceSphereView({
     return "À escuta — o Your Brain reage ao som.";
   }, [micStatus]);
 
+  const micRingStyle = useMemo(
+    () =>
+      micStatus === "listening"
+        ? {
+            opacity: 0.45 + micLevel * 0.55,
+            transform: `scale(${1 + micLevel * 0.12})`,
+          }
+        : { opacity: 0.2, transform: "scale(1)" },
+    [micStatus, micLevel]
+  );
+
   return (
     <div className={`advanced-voice-root advanced-voice-root--${themeMode}`}>
       <div className="advanced-voice-bg" aria-hidden>
@@ -301,13 +209,6 @@ export default function AdvancedVoiceSphereView({
           <pointLight position={[3.2, 2.2, 2.2]} intensity={1.02} color={palette.primaryLightColor} />
           <pointLight position={[-3.6, -1.9, -2.2]} intensity={0.66} color={palette.secondaryLightColor} />
           <ParticleHalo color={palette.particleColor} />
-          <group scale={ADVANCED_VOICE_CLUSTER_SCALE}>
-            <Float speed={1.02} rotationIntensity={0.26} floatIntensity={0.32}>
-              <OrganicCore color={palette.coreColor} emissive={palette.coreEmissive} />
-              <PulseShell color={palette.shellColor} />
-            </Float>
-            <WaveRing color={palette.barColor} emissive={palette.barEmissive} />
-          </group>
         </Canvas>
       </div>
 
@@ -328,16 +229,21 @@ export default function AdvancedVoiceSphereView({
         />
       </div>
 
-      <div className="advanced-voice-mic-bar" aria-live="polite">
-        {micStatus === "denied" || micStatus === "unsupported" ? (
-          <MicOff size={14} strokeWidth={2} aria-hidden />
-        ) : (
-          <Mic size={14} strokeWidth={2} aria-hidden />
-        )}
-        <span>{micLabel}</span>
-        {micStatus === "listening" ? (
-          <span className="advanced-voice-mic-meter" style={{ transform: `scaleX(${0.08 + micLevel * 0.92})` }} />
-        ) : null}
+      <div className="advanced-voice-mic-wrap">
+        <span className="advanced-voice-mic-ring" style={micRingStyle} aria-hidden />
+        <button
+          type="button"
+          className="advanced-voice-fab-mic"
+          aria-label={micLabel}
+          title={micLabel}
+          disabled={micStatus === "unsupported"}
+        >
+          {micStatus === "denied" || micStatus === "unsupported" ? (
+            <MicOff size={18} strokeWidth={2} aria-hidden />
+          ) : (
+            <Mic size={18} strokeWidth={2} aria-hidden />
+          )}
+        </button>
       </div>
 
       <style jsx>{`
@@ -398,41 +304,49 @@ export default function AdvancedVoiceSphereView({
           background: transparent;
         }
 
-        .advanced-voice-mic-bar {
+        .advanced-voice-mic-wrap {
           position: absolute;
           left: 50%;
-          bottom: clamp(14px, 3vh, 28px);
+          bottom: clamp(18px, 4vh, 36px);
           transform: translateX(-50%);
           z-index: 30;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          max-width: min(560px, calc(100% - 28px));
-          padding: 8px 14px;
-          border-radius: 999px;
-          border: 1px solid var(--bar-border);
-          background: rgba(10, 11, 14, 0.42);
-          color: rgba(198, 204, 216, 0.88);
-          font-family: "Inter", sans-serif;
-          font-size: 11px;
-          letter-spacing: 0.04em;
-          backdrop-filter: blur(12px);
+          width: 52px;
+          height: 52px;
           pointer-events: none;
         }
 
-        .advanced-voice-root--light .advanced-voice-mic-bar {
-          background: rgba(255, 255, 255, 0.55);
-          color: rgba(52, 58, 68, 0.9);
+        .advanced-voice-mic-ring {
+          position: absolute;
+          inset: -6px;
+          border-radius: 50%;
+          border: 2px solid rgba(120, 200, 255, 0.45);
+          transition: opacity 0.12s ease-out, transform 0.08s ease-out;
         }
 
-        .advanced-voice-mic-meter {
-          margin-left: 4px;
-          height: 4px;
-          width: 72px;
-          border-radius: 999px;
-          background: linear-gradient(90deg, rgba(120, 200, 255, 0.35), rgba(180, 140, 255, 0.55));
-          transform-origin: left center;
-          transition: transform 0.08s ease-out;
+        .advanced-voice-fab-mic {
+          position: absolute;
+          inset: 0;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          border: 1px solid var(--bar-border);
+          background: rgba(10, 11, 14, 0.5);
+          color: rgba(198, 204, 216, 0.95);
+          backdrop-filter: blur(12px);
+          pointer-events: auto;
+          cursor: default;
+          transition: background 0.18s ease, color 0.18s ease;
+        }
+
+        .advanced-voice-root--light .advanced-voice-fab-mic {
+          background: rgba(255, 255, 255, 0.6);
+          color: rgba(52, 58, 68, 0.95);
+        }
+
+        .advanced-voice-fab-mic:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
         }
       `}</style>
     </div>
