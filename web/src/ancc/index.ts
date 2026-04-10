@@ -14,6 +14,11 @@ export type {
   ANCCProcessResult,
   VaultCorrelationHit,
 } from "@/ancc/models/context";
+export type { FinalizeInteractionOptions, FinalizeInteractionResult } from "@/ancc/pipeline/finalize-interaction";
+export {
+  finalizeInteractionAfterResponse,
+  enrichAnccProcessResultWithOutcome,
+} from "@/ancc/pipeline/finalize-interaction";
 export type { InteractionOutcome, InteractionMetadata } from "@/ancc/models/metadata";
 export { newInteractionId } from "@/ancc/models/metadata";
 
@@ -27,11 +32,14 @@ export { buildHiddenSystemPromptBlock } from "@/ancc/agents/prompt-agent";
 export {
   mergeWithPlasticity,
   createPlasticityState,
+  applyVaultPathAffinityToHits,
+  normalizeVaultPathKey,
   type PlasticityAgentState,
 } from "@/ancc/agents/plasticity-agent";
 
 export { LINK_STRENGTH_WEIGHTS, MIN_CORRELATION_TO_LINK } from "@/ancc/rules/link-strength.rules";
 export { PLASTICITY } from "@/ancc/rules/plasticity.rules";
+export { OUTCOME_WEIGHTING } from "@/ancc/rules/outcome.rules";
 export { ANCC_CONTEXT_MARKERS } from "@/ancc/rules/prompt-injection.rules";
 
 export {
@@ -50,3 +58,5 @@ export {
 } from "@/ancc/pipeline/vault-correlation";
 export { adjustNoteLinks } from "@/ancc/pipeline/update-links";
 export { buildSystemContextBlock } from "@/ancc/pipeline/build-system-context";
+export { HYBRID_RETRIEVAL, hybridRetrieveVaultCorrelationHits } from "@/ancc/pipeline/hybrid-vault-retrieval";
+export type { HybridRetrievalEmbedder, HybridVaultRetrieveResult } from "@/ancc/pipeline/hybrid-vault-retrieval";

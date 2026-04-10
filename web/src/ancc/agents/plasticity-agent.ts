@@ -1,4 +1,6 @@
 import type { MemoryLink } from "@/ancc/models/link";
+import type { VaultCorrelationHit } from "@/ancc/models/context";
+import type { InteractionOutcome } from "@/ancc/models/metadata";
 import { applyDecay, applyReinforcement, PLASTICITY } from "@/ancc/rules/plasticity.rules";
 
 export type LinkActivationState = {
@@ -10,10 +12,57 @@ export type LinkActivationState = {
 
 export type PlasticityAgentState = {
   activations: Map<string, LinkActivationState>;
+  /**
+   * Reforço neuroplastico por nota do vault (path normalizado): o ANCC «reaprende»
+   * quais ficheiros costumam ser úteis nesta sessão.
+   */
+  vaultPathAffinity: Map<string, number>;
 };
 
+export function normalizeVaultPathKey(path: string): string {
+  return path.replace(/\\/g, "/").trim().toLowerCase();
+}
+
 export function createPlasticityState(): PlasticityAgentState {
-  return { activations: new Map() };
+  return { activations: new Map(), vaultPathAffinity: new Map() };
+}
+
+/** Aplica afinidade de sessão às relevâncias devolvidas pelo retrieval. */
+export function applyVaultPathAffinityToHits(
+  hits: VaultCorrelationHit[],
+  affinity: Map<string, number> | undefined
+): VaultCorrelationHit[] {
+  if (!affinity || affinity.size === 0) {
+    return hits;
+  }
+  const adjusted = hits.map((h) => {
+    const k = normalizeVaultPathKey(h.path);
+    const a = affinity.get(k) ?? 0;
+    const boost = 1 + 0.2 * a;
+    return { ...h, relevance: Math.min(1, h.relevance * boost) };
+  });
+  return adjusted.sort((x, y) => y.relevance - x.relevance);
+}
+
+/** Atualiza afinidade por caminho consoante o outcome da troca. */
+export function reinforceVaultPathAffinity(
+  state: PlasticityAgentState,
+  outcome: InteractionOutcome,
+  vaultPaths: string[]
+): void {
+  const aff = state.vaultPathAffinity;
+  const slice = vaultPaths.slice(0, 14);
+  for (const raw of slice) {
+    const k = normalizeVaultPathKey(raw);
+    const cur = aff.get(k) ?? 0.14;
+    if (outcome === "useful" || outcome === "deepened") {
+      aff.set(k, Math.min(1, cur + 0.065));
+    } else if (outcome === "ignored" || outcome === "redirected") {
+      aff.set(k, Math.max(0, cur * 0.9));
+    } else if (outcome === "corrected") {
+      aff.set(k, Math.max(0, cur * 0.86));
+    }
+  }
 }
 
 function keyFor(target: string): string {

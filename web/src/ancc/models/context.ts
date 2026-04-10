@@ -1,5 +1,6 @@
 import type { MemoryClass, MemoryNote } from "@/ancc/models/memory";
 import type { MemoryLink } from "@/ancc/models/link";
+import type { InteractionOutcome } from "@/ancc/models/metadata";
 
 /** Correlação enriquecida com origem no vault (para montar contexto sem ligar tudo a tudo). */
 export type VaultCorrelationHit = {
@@ -8,6 +9,9 @@ export type VaultCorrelationHit = {
   relevance: number;
   matchedTopics: string[];
   snippet?: string;
+  /** Similaridade cosseno query↔melhor chunk (recuperação híbrida). */
+  semanticSimilarity?: number;
+  retrievalMode?: "hybrid" | "lexical";
 };
 
 export type AssembledContext = {
@@ -36,4 +40,10 @@ export type ANCCProcessResult = {
     links: MemoryLink[];
     memoryClass: MemoryClass;
   };
+  /** Preenchido após `finalizeInteractionAfterResponse` (resposta do modelo). */
+  interactionOutcome?: InteractionOutcome;
+  outcomeConfidence?: number;
+  outcomeSignals?: string[];
+  /** Tópicos extraídos da resposta do assistente (eixo pós-diálogo). */
+  assistantTopicsAfterResponse?: string[];
 };

@@ -3,7 +3,12 @@ import { ANCC_CONTEXT_MARKERS } from "@/ancc/rules/prompt-injection.rules";
 
 function formatCorrelationLine(hit: AssembledContext["vaultCorrelations"][number]): string {
   const topics = hit.matchedTopics.length ? hit.matchedTopics.join(", ") : "—";
-  return `- ${hit.noteTitle} (${(hit.relevance * 100).toFixed(0)}% relevância; tópicos: ${topics})`;
+  const sem =
+    hit.semanticSimilarity != null
+      ? `; semântica ${(hit.semanticSimilarity * 100).toFixed(0)}%`
+      : "";
+  const mode = hit.retrievalMode === "hybrid" ? "; modo híbrido" : "";
+  return `- ${hit.noteTitle} (${(hit.relevance * 100).toFixed(0)}% relevância${sem}${mode}; tópicos: ${topics})`;
 }
 
 export function buildHiddenSystemPromptBlock(ctx: AssembledContext): string {
@@ -25,6 +30,9 @@ export function buildHiddenSystemPromptBlock(ctx: AssembledContext): string {
   } else {
     for (const h of ctx.vaultCorrelations.slice(0, 12)) {
       lines.push(formatCorrelationLine(h));
+      if (h.snippet?.trim()) {
+        lines.push(`  excerpt: ${h.snippet.trim().slice(0, 280)}`);
+      }
     }
   }
   lines.push("Recent active context:");

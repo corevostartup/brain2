@@ -48,6 +48,19 @@ function buildAnccYamlBlock(
   lines.push(`  interaction_id: ${yamlDoubleQuoted(result.memoryNote.id)}`);
   lines.push(`  memory_class: ${yamlDoubleQuoted(result.memoryClass)}`);
 
+  if (result.interactionOutcome) {
+    lines.push(`  interaction_outcome: ${yamlDoubleQuoted(result.interactionOutcome)}`);
+  }
+  if (result.outcomeConfidence !== undefined) {
+    lines.push(`  outcome_confidence: ${Number(result.outcomeConfidence.toFixed(4))}`);
+  }
+  if (result.outcomeSignals && result.outcomeSignals.length > 0) {
+    lines.push("  outcome_signals:");
+    for (const s of result.outcomeSignals.slice(0, 16)) {
+      lines.push(`    - ${yamlDoubleQuoted(s)}`);
+    }
+  }
+
   const topics = result.topics.length ? result.topics : result.memoryNote.topics;
   if (topics.length === 0) {
     lines.push("  topics: []");

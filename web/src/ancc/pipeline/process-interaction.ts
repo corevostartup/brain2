@@ -1,4 +1,4 @@
-import type { ANCCProcessResult } from "@/ancc/models/context";
+import type { ANCCProcessResult, VaultCorrelationHit } from "@/ancc/models/context";
 import type { MemoryNote } from "@/ancc/models/memory";
 import { createEmptyMemoryNote } from "@/ancc/models/memory";
 import { interpretUserInput } from "@/ancc/agents/input-agent";
@@ -10,6 +10,7 @@ import { buildHiddenSystemPromptBlock } from "@/ancc/agents/prompt-agent";
 import {
   mergeWithPlasticity,
   createPlasticityState,
+  applyVaultPathAffinityToHits,
   type PlasticityAgentState,
 } from "@/ancc/agents/plasticity-agent";
 import { correlateVaultFiles, type VaultFileSnapshot, buildVaultIndex } from "@/ancc/pipeline/vault-correlation";
@@ -42,19 +43,32 @@ export type ProcessInteractionOptions = {
   recurrenceTracker: TopicRecurrenceTracker;
   /** Resumo curto opcional (ex.: última intenção do utilizador). */
   recentBullets?: string[];
+  /** Memória de sessão comprimida (melhora tópicos + query de retrieval). */
+  sessionSummary?: string;
+  /**
+   * Quando definido (ex.: `/api/ancc-retrieve` com embeddings), substitui o correlate só-lexical.
+   */
+  precomputedVaultHits?: VaultCorrelationHit[];
 };
 
 export function processInteraction(opts: ProcessInteractionOptions): ANCCProcessResult {
   const nowMs = Date.now();
   const raw = interpretUserInput(opts.userMessage);
   const vaultTitles = opts.vaultFiles.map((f) => f.name.replace(/\.md$/i, ""));
+  const topicSource = [raw.normalizedText, opts.sessionSummary?.trim() ?? ""].filter(Boolean).join("\n");
   const topics = extractTopics({
-    text: raw.normalizedText,
+    text: topicSource,
     vaultNoteTitles: vaultTitles,
   });
 
   const recurrenceScore = bumpRecurrence(opts.recurrenceTracker, topics);
-  const vaultHits = correlateVaultFiles(topics, opts.vaultFiles);
+  let vaultHits: VaultCorrelationHit[];
+  if (opts.precomputedVaultHits && opts.precomputedVaultHits.length > 0) {
+    vaultHits = opts.precomputedVaultHits;
+  } else {
+    vaultHits = correlateVaultFiles(topics, opts.vaultFiles);
+  }
+  vaultHits = applyVaultPathAffinityToHits(vaultHits, opts.plasticityState.vaultPathAffinity);
   const index = buildVaultIndex(opts.vaultFiles);
 
   const bestFileRelevanceByTopic = new Map<string, number>();
@@ -102,12 +116,21 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
     userText: raw.normalizedText,
   });
 
+  const recentBullets = (() => {
+    const base = opts.recentBullets ?? [];
+    const sum = opts.sessionSummary?.trim();
+    if (!sum) {
+      return base;
+    }
+    return [`Rumo da conversa: ${sum.slice(0, 420)}`, ...base];
+  })();
+
   const assembled = assembleContext({
     topics,
     links,
     memoryClass,
     vaultCorrelations: vaultHits,
-    recentBullets: opts.recentBullets ?? [],
+    recentBullets,
   });
 
   const hiddenSystemBlock = buildHiddenSystemPromptBlock(assembled);

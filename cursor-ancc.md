@@ -13,9 +13,9 @@ Módulo TypeScript em `web/src/ancc`. Regra central: **«Every memory link must 
 7. Context Assembly  
 8. Hidden System Prompt Enrichment (`[ANCC Context Layer]` …)  
 9. LLM Response *(fora do módulo)*  
-10. Interaction Outcome Analysis *(futuro)*  
-11. Link Reweighting *(plasticidade já parcial no MVP)*  
-12. Memory Graph Adjustment  
+10. Interaction Outcome Analysis — `analyzeInteractionOutcome` em `agents/outcome-agent.ts`; orquestrado por `finalizeInteractionAfterResponse` após a resposta.  
+11. Link Reweighting — plasticidade pré-LLM (`mergeWithPlasticity`) + fatores pós-resposta (`OUTCOME_WEIGHTING` + `adjustMemoryGraphForOutcome`).  
+12. Memory Graph Adjustment — atualização do mapa de ativações em `agents/memory-graph-agent.ts` (reforço/decaimento/nós novos conforme o outcome).  
 
 ## Comportamento obrigatório (MVP)
 
@@ -25,7 +25,8 @@ Módulo TypeScript em `web/src/ancc`. Regra central: **«Every memory link must 
 
 ## API de entrada principal
 
-- `processInteraction({ userMessage, vaultFiles, plasticityState, recurrenceTracker, recentBullets? })` → `ANCCProcessResult` com `hiddenSystemBlock` para injetar no system prompt junto ao prompt base Brain2.
+- `processInteraction({ ... })` → `ANCCProcessResult` com `hiddenSystemBlock` para injetar no system prompt junto ao prompt base Brain2.  
+- Após a resposta do LLM: `finalizeInteractionAfterResponse({ userMessage, assistantMessage, preInteractionResult, plasticityState, vaultNoteTitles })` → outcome + ligações ajustadas; `enrichAnccProcessResultWithOutcome` para persistência no vault.
 
 ## Integração Brain2
 

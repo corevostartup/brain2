@@ -61,11 +61,15 @@ import { buildConversationOnlyVaultGraph } from "@/lib/vaultConversationGraph";
 import {
   processInteraction,
   createDefaultANCCSession,
+  finalizeInteractionAfterResponse,
+  enrichAnccProcessResultWithOutcome,
   type ANCCProcessResult,
+  type VaultCorrelationHit,
 } from "@/ancc";
 import { BRAIN2_BASE_SYSTEM_PROMPT } from "@/lib/brain2SystemPrompt";
 import { buildVaultSnapshotsForAncc } from "@/lib/anccVaultSnapshots";
 import { buildAnccRecentBullets } from "@/lib/anccRecentContext";
+import { appendRollingSessionSummary } from "@/lib/anccRollingSummary";
 import { buildVaultConversationMarkdown } from "@/lib/vaultConversationMarkdown";
 
 type PresetVaultResponse = {
@@ -383,6 +387,8 @@ export default function Home() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   /** Estado ANCC (plasticidade + recorrência) por sessão de chat no browser. */
   const anccSessionRef = useRef(createDefaultANCCSession());
+  /** Resumo rolante da conversa (query enriquecida para retrieval híbrido). */
+  const anccRollingSummaryRef = useRef("");
   const [isNativeMacShell, setIsNativeMacShell] = useState(() =>
     typeof window !== "undefined" && isBrain2NativeAppShell(),
   );
@@ -1335,12 +1341,41 @@ export default function Home() {
 
     try {
       const vaultFiles = buildVaultSnapshotsForAncc(vaultConversations);
+      let precomputedVaultHits: VaultCorrelationHit[] | undefined;
+      if (payload.apiKey.trim()) {
+        try {
+          const retrieveRes = await fetch("/api/ancc-retrieve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              apiKey: payload.apiKey,
+              userMessage: payload.content,
+              sessionSummary: anccRollingSummaryRef.current,
+              recentBullets: buildAnccRecentBullets(requestMessages),
+              vaultFiles,
+            }),
+          });
+          if (retrieveRes.ok) {
+            const retrieveJson = (await retrieveRes.json()) as {
+              hits?: VaultCorrelationHit[];
+            };
+            if (retrieveJson.hits && retrieveJson.hits.length > 0) {
+              precomputedVaultHits = retrieveJson.hits;
+            }
+          }
+        } catch {
+          /* retrieval híbrido opcional — fallback só-lexical no cliente */
+        }
+      }
+
       const anccResult = processInteraction({
         userMessage: payload.content,
         vaultFiles,
         plasticityState: anccSessionRef.current.plasticity,
         recurrenceTracker: anccSessionRef.current.recurrence,
-        recentBullets: buildAnccRecentBullets(chatMessages),
+        recentBullets: buildAnccRecentBullets(requestMessages),
+        sessionSummary: anccRollingSummaryRef.current.trim() || undefined,
+        precomputedVaultHits,
       });
       anccForPersist = anccResult;
 
@@ -1379,6 +1414,22 @@ export default function Home() {
       if (!assistantText) {
         throw new Error("Resposta vazia do modelo.");
       }
+
+      const vaultTitlesForOutcome = vaultFiles.map((f) => f.name.replace(/\.md$/i, ""));
+      const finalized = finalizeInteractionAfterResponse({
+        userMessage: payload.content,
+        assistantMessage: assistantText,
+        preInteractionResult: anccResult,
+        plasticityState: anccSessionRef.current.plasticity,
+        vaultNoteTitles: vaultTitlesForOutcome,
+      });
+      anccForPersist = enrichAnccProcessResultWithOutcome(anccResult, finalized);
+
+      anccRollingSummaryRef.current = appendRollingSessionSummary(
+        anccRollingSummaryRef.current,
+        payload.content,
+        assistantText,
+      );
 
       const nextMessages = [
         ...requestMessages,
@@ -1439,6 +1490,7 @@ export default function Home() {
     setChatSessionFolderPath(null);
     setIsChatOpen(true);
     anccSessionRef.current = createDefaultANCCSession();
+    anccRollingSummaryRef.current = "";
   }, []);
 
   const handleLogin = useCallback(async () => {
