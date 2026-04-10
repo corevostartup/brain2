@@ -338,6 +338,13 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
           cursor: text;
         }
 
+        /* Texto do utilizador na conversa: mais suave (só exibição; InputBar não usa estas classes). */
+        .chat-message--user p {
+          color: var(--muted);
+          font-style: italic;
+          opacity: 0.92;
+        }
+
         .message-actions {
           margin-top: 2px;
           display: inline-flex;

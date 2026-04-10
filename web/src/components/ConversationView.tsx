@@ -365,6 +365,12 @@ export default function ConversationView({ conversation, onClose }: Conversation
           cursor: text;
         }
 
+        .message-bubble--user p {
+          color: var(--muted);
+          font-style: italic;
+          opacity: 0.92;
+        }
+
         .message-actions {
           margin-top: 4px;
           display: inline-flex;

@@ -66,7 +66,7 @@ import {
   type ANCCProcessResult,
   type VaultCorrelationHit,
 } from "@/ancc";
-import { BRAIN2_BASE_SYSTEM_PROMPT } from "@/lib/brain2SystemPrompt";
+import { buildBrain2BaseSystemPrompt } from "@/lib/brain2SystemPrompt";
 import { buildVaultSnapshotsForAncc } from "@/lib/anccVaultSnapshots";
 import { buildAnccRecentBullets } from "@/lib/anccRecentContext";
 import { appendRollingSessionSummary } from "@/lib/anccRollingSummary";
@@ -1379,7 +1379,7 @@ export default function Home() {
       });
       anccForPersist = anccResult;
 
-      const systemContent = `${BRAIN2_BASE_SYSTEM_PROMPT}\n\n${anccResult.hiddenSystemBlock}`;
+      const systemContent = `${buildBrain2BaseSystemPrompt()}\n\n${anccResult.hiddenSystemBlock}`;
       const priorForApi = chatMessages.filter((m) => m.role !== "system");
       const apiMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
         { role: "system", content: systemContent },
