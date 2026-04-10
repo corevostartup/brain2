@@ -10,7 +10,7 @@ export const CORRELATION = {
   /** Pool lexical inicial em `correlateVaultFiles` (candidatos). */
   minLexicalCandidate: 0.2,
   /** Incluir no bloco ANCC para o modelo (contexto do turno). */
-  minContext: 0.26,
+  minContext: 0.24,
   /** Gravar em frontmatter / aresta no grafo de conversas — só o que faz sentido forte. */
   minPersist: 0.5,
   maxHitsContext: 14,

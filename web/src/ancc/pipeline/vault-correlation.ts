@@ -1,6 +1,7 @@
 import { parseWikiLinksFromText } from "@/ancc/models/link";
 import type { VaultCorrelationHit } from "@/ancc/models/context";
 import { CORRELATION } from "@/ancc/rules/correlation.rules";
+import { extractYamlTagsFromMarkdown } from "@/lib/markdownFrontmatter";
 
 export type VaultFileSnapshot = {
   path: string;
@@ -11,6 +12,53 @@ export type VaultFileSnapshot = {
 
 export function noteTitleFromFileName(name: string): string {
   return name.replace(/\.md$/i, "").trim();
+}
+
+/** Palavras-chave (≥3 chars) para cruzar com tags YAML — alinhado ao tokenize da Joi. */
+export function tokenizeQueryKeywords(text: string): Set<string> {
+  const lower = text.toLowerCase();
+  const set = new Set<string>();
+  for (const raw of lower.split(/\s+/)) {
+    const w = raw.replace(/[^a-z0-9áàâãéêíóôõúçñüöäëï]/gi, "");
+    if (w.length >= 3) {
+      set.add(w);
+    }
+  }
+  return set;
+}
+
+/**
+ * Joi: interseção exata tag↔keyword; Obsidian: também segmentos em `tema/subtema` e substring leve.
+ */
+export function yamlTagMatchScore(tags: string[], keywords: Set<string>): number {
+  if (tags.length === 0 || keywords.size === 0) {
+    return 0;
+  }
+  let matches = 0;
+  outer: for (const tag of tags) {
+    const t = tag.trim().toLowerCase();
+    if (!t) {
+      continue;
+    }
+    if (keywords.has(t)) {
+      matches += 1;
+      continue;
+    }
+    for (const part of t.split(/[/]+/)) {
+      const p = part.trim();
+      if (p && keywords.has(p)) {
+        matches += 1;
+        continue outer;
+      }
+    }
+    for (const kw of keywords) {
+      if (t.includes(kw)) {
+        matches += 1;
+        continue outer;
+      }
+    }
+  }
+  return Math.min(1, matches / Math.max(1, tags.length));
 }
 
 /**
@@ -89,6 +137,11 @@ export function scoreTopicFileCorrelation(
     score = 0.28 + (score - 0.32) * 0.55;
   }
 
+  /** Conversas exportadas Brain2 (`## User` / `## Brain2`): reforço leve quando o tema aparece no diálogo. */
+  if (/\n##\s*(user|brain2)\b/i.test(file.content) && hits >= 1) {
+    score += 0.05;
+  }
+
   return Math.min(1, score);
 }
 
@@ -108,14 +161,24 @@ export function splitVaultHitsByPersistence(
   return { forContext, forPersistence };
 }
 
+export type CorrelateVaultFilesOptions = {
+  /** Texto da pergunta + resumo de sessão: reforça ranking quando tags YAML batem com keywords (estilo Joi). */
+  tagQueryHint?: string;
+};
+
 export function correlateVaultFiles(
   topics: string[],
   files: VaultFileSnapshot[],
-  minRelevance: number = CORRELATION.minLexicalCandidate
+  minRelevance: number = CORRELATION.minLexicalCandidate,
+  options?: CorrelateVaultFilesOptions
 ): VaultCorrelationHit[] {
   if (files.length === 0 || topics.length === 0) {
     return [];
   }
+
+  const tagKeywords = options?.tagQueryHint?.trim()
+    ? tokenizeQueryKeywords(options.tagQueryHint)
+    : null;
 
   const index = buildVaultIndex(files);
   const hits: VaultCorrelationHit[] = [];
@@ -133,7 +196,14 @@ export function correlateVaultFiles(
       }
     }
 
-    if (best < minRelevance) {
+    let tagBoost = 0;
+    if (tagKeywords && tagKeywords.size > 0) {
+      const yamlTags = extractYamlTagsFromMarkdown(file.content);
+      tagBoost = 0.28 * yamlTagMatchScore(yamlTags, tagKeywords);
+    }
+    const relevance = Math.min(1, best + tagBoost);
+
+    if (relevance < minRelevance) {
       continue;
     }
 
@@ -141,7 +211,7 @@ export function correlateVaultFiles(
     hits.push({
       path: file.path,
       noteTitle: noteTitleFromFileName(file.name),
-      relevance: best,
+      relevance,
       matchedTopics: [...matched].slice(0, 8),
       snippet: snippet.length ? snippet : undefined,
     });

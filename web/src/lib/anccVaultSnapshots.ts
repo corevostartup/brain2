@@ -1,8 +1,9 @@
 import type { VaultConversation } from "@/lib/vault";
 import type { VaultFileSnapshot } from "@/ancc/pipeline/vault-correlation";
 
-const MAX_FILES = 160;
-const MAX_CHARS_PER_FILE = 24_000;
+/** Mais matéria por nota = melhor chance de embeddings apanhar trechos de conversa reais. */
+const MAX_FILES = 200;
+const MAX_CHARS_PER_FILE = 36_000;
 
 function fileNameFromPath(path: string): string {
   const parts = path.replace(/\\/g, "/").split("/");

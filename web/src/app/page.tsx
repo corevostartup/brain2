@@ -389,6 +389,11 @@ export default function Home() {
   const anccSessionRef = useRef(createDefaultANCCSession());
   /** Resumo rolante da conversa (query enriquecida para retrieval híbrido). */
   const anccRollingSummaryRef = useRef("");
+  /**
+   * Evita duplicar conversas no vault: com `chatSessionId` ainda null, dois envios rápidos
+   * geravam dois `sessionId`/`startedAt` antes do setState — dois ficheiros para a mesma conversa.
+   */
+  const newChatSessionLockRef = useRef<{ sessionId: string; startedAt: number } | null>(null);
   const [isNativeMacShell, setIsNativeMacShell] = useState(() =>
     typeof window !== "undefined" && isBrain2NativeAppShell(),
   );
@@ -955,6 +960,29 @@ export default function Home() {
     }
   }, [applyVaultData]);
 
+  /**
+   * Clicar numa pasta (ou «Todas as pastas») foca uma nova conversa nesse contexto:
+   * limpa sessão/chat anterior para o primeiro envio gravar na pasta correta.
+   */
+  const handleFolderSelect = useCallback((path: string | null) => {
+    setSelectedFolderPath(path);
+    setSelectedConversationId(null);
+    setReturnToYourBrainOnConversationClose(false);
+    setIsSettingsOpen(false);
+    setIsYourBrainOpen(false);
+    setIsAdvancedVoiceOpen(false);
+    setChatMessages([]);
+    setChatError(null);
+    setChatLoading(false);
+    setChatSessionId(null);
+    setChatSessionStartedAt(null);
+    setChatSessionFolderPath(null);
+    setIsChatOpen(true);
+    anccSessionRef.current = createDefaultANCCSession();
+    anccRollingSummaryRef.current = "";
+    newChatSessionLockRef.current = null;
+  }, []);
+
   const handleCreateFolder = useCallback(async (parentPath: string, folderName: string) => {
     if (hasCloudVaultData) {
       window.alert("Nova pasta ainda nao esta disponivel para o vault no Google Drive (somente leitura).");
@@ -985,7 +1013,7 @@ export default function Home() {
         throw new Error("create-folder-failed");
       }
       const nextSelectedPath = parentPath ? `${parentPath}/${safeFolderName}` : safeFolderName;
-      setSelectedFolderPath(nextSelectedPath);
+      handleFolderSelect(nextSelectedPath);
       return;
     }
 
@@ -1000,8 +1028,8 @@ export default function Home() {
     }
 
     const nextSelectedPath = parentPath ? `${parentPath}/${safeFolderName}` : safeFolderName;
-    setSelectedFolderPath(nextSelectedPath);
-  }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData]);
+    handleFolderSelect(nextSelectedPath);
+  }, [handleFolderSelect, hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData]);
 
   const handleDeleteFolder = useCallback(async (folderPath: string) => {
     if (hasNativeVaultData || hasCloudVaultData) {
@@ -1030,9 +1058,9 @@ export default function Home() {
       selectedFolderPath &&
       (selectedFolderPath === folderPath || selectedFolderPath.startsWith(`${folderPath}/`))
     ) {
-      setSelectedFolderPath(null);
+      handleFolderSelect(null);
     }
-  }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData, selectedFolderPath]);
+  }, [handleFolderSelect, hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData, selectedFolderPath]);
 
   const handleRenameFolder = useCallback(async (folderPath: string, nextFolderNameRaw: string) => {
     if (hasCloudVaultData) {
@@ -1312,9 +1340,23 @@ export default function Home() {
   const handleSendToBrain = useCallback(async (payload: { content: string; model: string; apiKey: string }) => {
     setIsChatOpen(true);
     const targetFolderPathForConversation = normalizeFolderPath(chatSessionFolderPath ?? selectedFolderPath);
-    const sessionId = chatSessionId ?? createConversationRecordId(createMessageId());
-    const startedAt = chatSessionStartedAt ?? Date.now();
-    if (!chatSessionId) {
+    let sessionId: string;
+    let startedAt: number;
+    if (chatSessionId != null) {
+      sessionId = chatSessionId;
+      startedAt =
+        chatSessionStartedAt ??
+        newChatSessionLockRef.current?.startedAt ??
+        Date.now();
+    } else {
+      if (!newChatSessionLockRef.current) {
+        newChatSessionLockRef.current = {
+          sessionId: createConversationRecordId(createMessageId()),
+          startedAt: Date.now(),
+        };
+      }
+      sessionId = newChatSessionLockRef.current.sessionId;
+      startedAt = newChatSessionLockRef.current.startedAt;
       setChatSessionId(sessionId);
       setChatSessionStartedAt(startedAt);
       setChatSessionFolderPath(targetFolderPathForConversation);
@@ -1491,6 +1533,7 @@ export default function Home() {
     setIsChatOpen(true);
     anccSessionRef.current = createDefaultANCCSession();
     anccRollingSummaryRef.current = "";
+    newChatSessionLockRef.current = null;
   }, []);
 
   const handleLogin = useCallback(async () => {
@@ -1646,7 +1689,7 @@ export default function Home() {
           vaultFolders={vaultFolders}
           vaultConversations={vaultConversations}
           selectedFolderPath={selectedFolderPath}
-          onFolderSelect={setSelectedFolderPath}
+          onFolderSelect={handleFolderSelect}
           selectedConversationId={selectedConversationId}
           onConversationSelect={handleConversationSelect}
           onCreateFolder={handleCreateFolder}
@@ -1683,7 +1726,10 @@ export default function Home() {
           vaultFolders={vaultFolders}
           vaultConversations={vaultConversations}
           selectedFolderPath={selectedFolderPath}
-          onFolderSelect={setSelectedFolderPath}
+          onFolderSelect={(path) => {
+            setIsMobileSidebarOpen(false);
+            handleFolderSelect(path);
+          }}
           selectedConversationId={selectedConversationId}
           onConversationSelect={(conversation) => {
             setIsMobileSidebarOpen(false);
@@ -1752,7 +1798,11 @@ export default function Home() {
             error={chatError}
           />
         ) : activeView === "advanced-voice" ? (
-          <AdvancedVoiceSphereView onClose={() => setIsAdvancedVoiceOpen(false)} />
+          <AdvancedVoiceSphereView
+            onClose={() => setIsAdvancedVoiceOpen(false)}
+            vaultGraph={vaultGraph}
+            vaultGraphLoading={graphLoading}
+          />
         ) : activeView === "conversation" && selectedConversation ? (
           <ConversationView
             conversation={selectedConversation}

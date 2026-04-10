@@ -100,6 +100,16 @@ type BrainGraphViewProps = {
   graph?: VaultGraph | null;
   loading?: boolean;
   onOpenConversationFromNode?: (nodeId: string, nodeLabel: string) => void;
+  /** Espectador: sem arrastar nós nem abrir conversas; destaque opcional por voz em tempo real. */
+  variant?: "default" | "spectator";
+  liveSpeechNodeStrength?: Map<string, number>;
+  liveSpeechLinkKeys?: Set<string>;
+  /** Fase (rad) para pulsar ligações/nós correlacionados ao discurso. */
+  liveSpeechPulsePhase?: number;
+  /** Esconder legenda + rodapé ANCC (embutido noutro ecrã). */
+  compactChrome?: boolean;
+  /** O painel pai pode fornecir o botão fechar. */
+  hideCloseButton?: boolean;
 };
 
 type BrainNode = {
@@ -158,6 +168,12 @@ export default function BrainGraphView({
   graph,
   loading,
   onOpenConversationFromNode,
+  variant = "default",
+  liveSpeechNodeStrength,
+  liveSpeechLinkKeys,
+  liveSpeechPulsePhase = 0,
+  compactChrome = false,
+  hideCloseButton = false,
 }: BrainGraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
@@ -611,6 +627,21 @@ export default function BrainGraphView({
       const isVault = node.group === "vault";
       const base = isVault ? VAULT_NODE_COLOR : GROUP_COLORS[node.group] || "#b0b0b0";
 
+      if (
+        variant === "spectator" &&
+        liveSpeechNodeStrength &&
+        liveSpeechNodeStrength.size > 0
+      ) {
+        const s = liveSpeechNodeStrength.get(id);
+        if (s != null && s > 0) {
+          const pulse = 0.78 + 0.22 * Math.sin(liveSpeechPulsePhase);
+          const hue = 156 + s * 54;
+          const light = 50 + s * 18 * pulse;
+          return `hsl(${hue}, 91%, ${Math.min(78, light)}%)`;
+        }
+        return withAlpha(base, isNativeShell ? 0.34 : 0.26);
+      }
+
       if (focusRootId && dragEgoSet) {
         if (!dragEgoSet.has(id)) return withAlpha(base, UNRELATED_NODE_ALPHA);
         if (id === focusRootId) return TECH_DRAG_NODE;
@@ -624,7 +655,15 @@ export default function BrainGraphView({
       if (highlightSet.has(id)) return base;
       return isVault ? VAULT_NODE_COLOR_DIM : GROUP_COLORS_DIM[node.group] || "#484848";
     },
-    [highlightSet, isNativeShell, focusRootId, dragEgoSet]
+    [
+      highlightSet,
+      isNativeShell,
+      focusRootId,
+      dragEgoSet,
+      variant,
+      liveSpeechNodeStrength,
+      liveSpeechPulsePhase,
+    ]
   );
 
   const linkColor = useCallback(
@@ -636,6 +675,23 @@ export default function BrainGraphView({
       const baseDim = `rgba(255,255,255,${UNRELATED_LINK_ALPHA})`;
       const hi = "rgba(255,255,255,0.38)";
       const faded = "rgba(255,255,255,0.045)";
+
+      if (
+        variant === "spectator" &&
+        liveSpeechLinkKeys &&
+        liveSpeechLinkKeys.size > 0 &&
+        liveSpeechLinkKeys.has(k)
+      ) {
+        const pulse = 0.48 + 0.52 * Math.sin(liveSpeechPulsePhase * 1.18);
+        return `hsla(282, 88%, 58%, ${0.38 + pulse * 0.52})`;
+      }
+      if (
+        variant === "spectator" &&
+        liveSpeechNodeStrength &&
+        liveSpeechNodeStrength.size > 0
+      ) {
+        return "rgba(255,255,255,0.038)";
+      }
 
       if (focusRootId && dragEgoSet) {
         const bothInEgo = dragEgoSet.has(a) && dragEgoSet.has(b);
@@ -650,13 +706,31 @@ export default function BrainGraphView({
       if (highlightLinks.size === 0) return base;
       return highlightLinks.has(k) ? hi : faded;
     },
-    [highlightLinks, isNativeShell, focusRootId, dragEgoSet]
+    [
+      highlightLinks,
+      isNativeShell,
+      focusRootId,
+      dragEgoSet,
+      variant,
+      liveSpeechLinkKeys,
+      liveSpeechNodeStrength,
+      liveSpeechPulsePhase,
+    ]
   );
 
   const linkWidth = useCallback(
     (link: LinkObject<BrainNode, BrainLink>) => {
       const a = nodeIdOf(link.source);
       const b = nodeIdOf(link.target);
+      const k = linkKey(a, b);
+      if (
+        variant === "spectator" &&
+        liveSpeechLinkKeys &&
+        liveSpeechLinkKeys.has(k)
+      ) {
+        const pulse = 0.62 + 0.38 * Math.sin(liveSpeechPulsePhase * 1.05);
+        return 0.95 + pulse * 1.35;
+      }
       if (focusRootId && dragEgoSet) {
         const bothInEgo = dragEgoSet.has(a) && dragEgoSet.has(b);
         if (!bothInEgo) return 0.45;
@@ -668,7 +742,27 @@ export default function BrainGraphView({
       }
       return highlightLinks.has(linkKey(a, b)) ? 1.25 : 0.65;
     },
-    [highlightLinks, isNativeShell, focusRootId, dragEgoSet]
+    [
+      highlightLinks,
+      isNativeShell,
+      focusRootId,
+      dragEgoSet,
+      variant,
+      liveSpeechLinkKeys,
+      liveSpeechPulsePhase,
+    ]
+  );
+
+  const linkDirectionalParticles = useCallback(
+    (link: LinkObject<BrainNode, BrainLink>) => {
+      if (variant !== "spectator" || !liveSpeechLinkKeys?.size) {
+        return 0;
+      }
+      const a = nodeIdOf(link.source);
+      const b = nodeIdOf(link.target);
+      return liveSpeechLinkKeys.has(linkKey(a, b)) ? 6 : 0;
+    },
+    [variant, liveSpeechLinkKeys]
   );
 
   const nodeCanvasObjectMode = useCallback(() => "after" as const, []);
@@ -808,14 +902,16 @@ export default function BrainGraphView({
 
   return (
     <div className="brain-graph-root">
-      <button
-        className="brain-graph-close"
-        onClick={onClose}
-        aria-label="Fechar visualização"
-        type="button"
-      >
-        <X size={16} strokeWidth={2} />
-      </button>
+      {!hideCloseButton ? (
+        <button
+          className="brain-graph-close"
+          onClick={onClose}
+          aria-label="Fechar visualização"
+          type="button"
+        >
+          <X size={16} strokeWidth={2} />
+        </button>
+      ) : null}
 
       {loading ? (
         <div className="brain-graph-loading">
@@ -842,7 +938,9 @@ export default function BrainGraphView({
               nodeColor={nodeColor}
               linkColor={linkColor}
               linkWidth={linkWidth}
-              linkDirectionalParticles={0}
+              linkDirectionalParticles={variant === "spectator" ? linkDirectionalParticles : 0}
+              linkDirectionalParticleSpeed={variant === "spectator" ? 0.009 : 0}
+              linkDirectionalParticleWidth={variant === "spectator" ? 1.35 : 0}
               d3VelocityDecay={
                 isNativeShell && useVault ? PHYSICS.nativeVelocityDecay : PHYSICS.velocityDecay
               }
@@ -850,17 +948,17 @@ export default function BrainGraphView({
               d3AlphaMin={isNativeShell && useVault ? PHYSICS.nativeAlphaMin : PHYSICS.alphaMin}
               warmupTicks={PHYSICS.warmupTicks}
               cooldownTime={isNativeShell && useVault ? PHYSICS.nativeCooldownMs : PHYSICS.cooldownMs}
-              enableNodeDrag
+              enableNodeDrag={variant !== "spectator"}
               enableZoomInteraction
               enablePanInteraction
               minZoom={0.12}
               maxZoom={8}
               showNavInfo={false}
-              onNodeClick={onNodeClick}
-              onNodeHover={onNodeHover}
+              onNodeClick={variant === "spectator" ? () => {} : onNodeClick}
+              onNodeHover={variant === "spectator" ? () => undefined : onNodeHover}
               onNodeDrag={onNodeDrag}
               onNodeDragEnd={onNodeDragEnd}
-              onBackgroundClick={onBackgroundClick}
+              onBackgroundClick={variant === "spectator" ? () => undefined : onBackgroundClick}
               onEngineStop={onEngineStop}
             />
           </div>
@@ -871,20 +969,22 @@ export default function BrainGraphView({
         </div>
       )}
 
-      <footer className="brain-graph-footer-stack" role="contentinfo">
-        {!loading && useVault && graph ? (
-          <div className="brain-graph-legend">
-            <span className="legend-item">
-              <span className="legend-dot" style={{ background: VAULT_NODE_COLOR }} />
-              {graph.nodes.length} notas &middot; {graph.edges.length} conexões
-            </span>
-          </div>
-        ) : null}
-        <p className="brain-graph-ancc">
-          Brain2 is powered by an Artificial Neuroplastic Cognitive Correlation model (
-          <span className="brain-graph-ancc-abbr">ANCC</span>)
-        </p>
-      </footer>
+      {!compactChrome ? (
+        <footer className="brain-graph-footer-stack" role="contentinfo">
+          {!loading && useVault && graph ? (
+            <div className="brain-graph-legend">
+              <span className="legend-item">
+                <span className="legend-dot" style={{ background: VAULT_NODE_COLOR }} />
+                {graph.nodes.length} notas &middot; {graph.edges.length} conexões
+              </span>
+            </div>
+          ) : null}
+          <p className="brain-graph-ancc">
+            Brain2 is powered by an Artificial Neuroplastic Cognitive Correlation model (
+            <span className="brain-graph-ancc-abbr">ANCC</span>)
+          </p>
+        </footer>
+      ) : null}
 
       <style jsx>{`
         .brain-graph-root {

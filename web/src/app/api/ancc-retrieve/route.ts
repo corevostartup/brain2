@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { hybridRetrieveVaultCorrelationHits } from "@/ancc/pipeline/hybrid-vault-retrieval";
 import type { VaultFileSnapshot } from "@/ancc/pipeline/vault-correlation";
+import { createCachedOpenAIEmbeddingTexts } from "@/lib/openaiEmbeddingCache";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -63,12 +64,16 @@ export async function POST(request: Request) {
   }
 
   try {
+    const embedTexts = createCachedOpenAIEmbeddingTexts((texts) =>
+      embedOpenAITextsSmall(apiKey, texts)
+    );
+
     const result = await hybridRetrieveVaultCorrelationHits({
       userMessage,
       sessionSummary: body.sessionSummary,
       recentBullets: body.recentBullets,
       vaultFiles,
-      embedTexts: (texts) => embedOpenAITextsSmall(apiKey, texts),
+      embedTexts,
     });
     return NextResponse.json(result, { status: 200 });
   } catch (error) {

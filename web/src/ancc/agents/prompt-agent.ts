@@ -1,5 +1,5 @@
 import type { AssembledContext } from "@/ancc/models/context";
-import { ANCC_CONTEXT_MARKERS } from "@/ancc/rules/prompt-injection.rules";
+import { ANCC_CONTEXT_MARKERS, ANCC_VAULT_MEMORY_CONTRACT } from "@/ancc/rules/prompt-injection.rules";
 
 function formatCorrelationLine(hit: AssembledContext["vaultCorrelations"][number]): string {
   const topics = hit.matchedTopics.length ? hit.matchedTopics.join(", ") : "—";
@@ -14,6 +14,10 @@ function formatCorrelationLine(hit: AssembledContext["vaultCorrelations"][number
 export function buildHiddenSystemPromptBlock(ctx: AssembledContext): string {
   const lines: string[] = [];
   lines.push(ANCC_CONTEXT_MARKERS.begin);
+  for (const line of ANCC_VAULT_MEMORY_CONTRACT) {
+    lines.push(line);
+  }
+  lines.push("---");
   lines.push(`Active topics: ${ctx.wikiLinksFormatted.join(", ") || "(none)"}`);
   lines.push(`Priority memory class: ${ctx.priorityMemoryClass}`);
   lines.push("Relevant correlations:");

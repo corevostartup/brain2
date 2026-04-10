@@ -19,6 +19,7 @@ import {
   type VaultFileSnapshot,
   buildVaultIndex,
 } from "@/ancc/pipeline/vault-correlation";
+import { CORRELATION } from "@/ancc/rules/correlation.rules";
 import { newInteractionId } from "@/ancc/models/metadata";
 
 export type TopicRecurrenceTracker = {
@@ -78,7 +79,9 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
   if (opts.precomputedVaultHits && opts.precomputedVaultHits.length > 0) {
     vaultHits = opts.precomputedVaultHits;
   } else {
-    vaultHits = correlateVaultFiles(topics, opts.vaultFiles);
+    vaultHits = correlateVaultFiles(topics, opts.vaultFiles, CORRELATION.minLexicalCandidate, {
+      tagQueryHint: topicSource,
+    });
   }
   vaultHits = applyVaultPathAffinityToHits(vaultHits, opts.plasticityState.vaultPathAffinity);
   const { forContext: vaultForContext, forPersistence: vaultPersisted } = splitVaultHitsByPersistence(vaultHits);

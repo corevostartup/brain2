@@ -40,7 +40,10 @@ export {
 export { LINK_STRENGTH_WEIGHTS, MIN_CORRELATION_TO_LINK } from "@/ancc/rules/link-strength.rules";
 export { PLASTICITY } from "@/ancc/rules/plasticity.rules";
 export { OUTCOME_WEIGHTING } from "@/ancc/rules/outcome.rules";
-export { ANCC_CONTEXT_MARKERS } from "@/ancc/rules/prompt-injection.rules";
+export {
+  ANCC_CONTEXT_MARKERS,
+  ANCC_VAULT_MEMORY_CONTRACT,
+} from "@/ancc/rules/prompt-injection.rules";
 export { CORRELATION } from "@/ancc/rules/correlation.rules";
 
 export {
@@ -57,8 +60,12 @@ export {
   buildVaultIndex,
   noteTitleFromFileName,
   scoreTopicFileCorrelation,
+  tokenizeQueryKeywords,
+  yamlTagMatchScore,
+  type CorrelateVaultFilesOptions,
 } from "@/ancc/pipeline/vault-correlation";
 export { adjustNoteLinks } from "@/ancc/pipeline/update-links";
 export { buildSystemContextBlock } from "@/ancc/pipeline/build-system-context";
 export { HYBRID_RETRIEVAL, hybridRetrieveVaultCorrelationHits } from "@/ancc/pipeline/hybrid-vault-retrieval";
+export { splitVaultBodyIntoRetrievalChunks } from "@/ancc/pipeline/brain-vault-chunks";
 export type { HybridRetrievalEmbedder, HybridVaultRetrieveResult } from "@/ancc/pipeline/hybrid-vault-retrieval";
