@@ -56,6 +56,7 @@ import {
 import { emitNativeDebug, isNativeShellBridgeAvailable } from "@/lib/nativeDebug";
 import { requestGoogleDriveAccessToken } from "@/lib/googleDrive";
 import { loadVaultFromGoogleDriveFolder } from "@/lib/googleDriveVault";
+import { buildConversationOnlyVaultGraph } from "@/lib/vaultConversationGraph";
 import {
   processInteraction,
   createDefaultANCCSession,
@@ -274,21 +275,6 @@ function folderPathExists(nodes: FolderTreeNode[], targetPath: string, parentPat
   return false;
 }
 
-function parseWikilinks(content: string): string[] {
-  const regex = /\[\[([^\]|#]+?)(?:#[^\]|]*)?(?:\|[^\]]*?)?\]\]/g;
-  const links: string[] = [];
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(content)) !== null) {
-    const target = match[1]?.trim();
-    if (target) {
-      links.push(target);
-    }
-  }
-
-  return links;
-}
-
 function normalizeGraphNodeId(raw: string): string {
   return raw
     .normalize("NFC")
@@ -340,50 +326,6 @@ function sanitizeVaultGraph(graph: VaultGraph): VaultGraph {
   return { nodes, edges };
 }
 
-function buildGraphFromConversations(conversations: VaultConversation[]): VaultGraph {
-  const nodeMap = new Map<string, string>();
-
-  for (const conversation of conversations) {
-    const title = conversation.title.trim();
-    if (!title) continue;
-    nodeMap.set(title.toLowerCase(), title);
-  }
-
-  const nodes = Array.from(nodeMap.entries()).map(([id, label]) => ({ id, label }));
-  const edges: Array<{ source: string; target: string }> = [];
-  const edgeSet = new Set<string>();
-
-  for (const conversation of conversations) {
-    const sourceTitle = conversation.title.trim();
-    if (!sourceTitle) continue;
-    const sourceId = sourceTitle.toLowerCase();
-    const links = parseWikilinks(conversation.content || "");
-
-    for (const link of links) {
-      const targetId = link.toLowerCase();
-      if (!nodeMap.has(targetId)) {
-        nodeMap.set(targetId, link);
-        nodes.push({ id: targetId, label: link });
-      }
-
-      if (sourceId === targetId) {
-        continue;
-      }
-
-      const edgeKey = sourceId < targetId
-        ? `${sourceId}::${targetId}`
-        : `${targetId}::${sourceId}`;
-
-      if (!edgeSet.has(edgeKey)) {
-        edgeSet.add(edgeKey);
-        edges.push({ source: sourceId, target: targetId });
-      }
-    }
-  }
-
-  return { nodes, edges };
-}
-
 function normalizeGraph(
   graph: VaultGraph | null | undefined,
   conversations: VaultConversation[]
@@ -397,7 +339,7 @@ function normalizeGraph(
     return hasValidGraph ? sanitizeVaultGraph(graph ?? { nodes: [], edges: [] }) : null;
   }
 
-  return buildGraphFromConversations(conversations);
+  return buildConversationOnlyVaultGraph(conversations);
 }
 
 /** Tempo minimo da splash; o Firebase pode resolver a sessao em poucos ms. */

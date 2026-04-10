@@ -3,6 +3,7 @@ import {
   VAULT_LOOSE_MEMORIES_FOLDER_NAME,
   VAULT_MEMORIES_FOLDER_NOTE_BASENAME,
 } from "@/lib/brain2CentralFolder";
+import { extractRelatedVaultPathsFromMarkdown } from "@/lib/vaultConversationGraph";
 
 export type VaultMarkdownFile = {
   name: string;
@@ -47,45 +48,85 @@ export function buildConversationsFromMarkdownFiles(files: VaultMarkdownFile[]):
     .sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
-export function buildGraphFromMarkdownFiles(files: VaultMarkdownFile[]): VaultGraph {
-  const nodeMap = new Map<string, string>();
+function normalizePathKey(path: string): string {
+  return path.replace(/\\/g, "/").trim().toLowerCase();
+}
 
-  for (const file of files) {
-    nodeMap.set(file.name.toLowerCase(), file.name);
+/** Resolve [[wikilink]] para o path normalizado de um ficheiro do conjunto (sem criar nós órfãos). */
+function resolveWikilinkToFilePath(linkText: string, files: VaultMarkdownFile[]): string | null {
+  const t = linkText.trim().toLowerCase();
+  if (!t) {
+    return null;
   }
 
-  const nodes = Array.from(nodeMap.values()).map((label) => ({
-    id: label.toLowerCase(),
-    label,
-  }));
+  for (const f of files) {
+    const pathNorm = normalizePathKey(f.path);
+    const stem = f.name.replace(/\.md$/i, "").trim().toLowerCase();
+    const fullLower = f.name.trim().toLowerCase();
+    const base = pathNorm.split("/").pop() ?? "";
+    const baseStem = base.replace(/\.md$/i, "").trim().toLowerCase();
 
-  const edges: Array<{ source: string; target: string }> = [];
+    if (stem === t || fullLower === t || baseStem === t || base.toLowerCase() === t) {
+      return pathNorm;
+    }
+
+    const simplified = baseStem.replace(/\s+-\s*\([^)]*\)\s*$/u, "").trim();
+    if (simplified && simplified === t) {
+      return pathNorm;
+    }
+  }
+
+  return null;
+}
+
+function linkKeyUndirected(a: string, b: string): string {
+  return a < b ? `${a}::${b}` : `${b}::${a}`;
+}
+
+/**
+ * Um nó por ficheiro `.md` (exceto hub Memories). Arestas só entre ficheiros do vault
+ * quando o wikilink ou o ANCC `vault_path` aponta para outro ficheiro conhecido.
+ */
+export function buildGraphFromMarkdownFiles(files: VaultMarkdownFile[]): VaultGraph {
+  const usable = files.filter((f) => !isMemoriesHubNotePath(f.path));
+
+  const nodes: VaultGraph["nodes"] = usable.map((f) => {
+    const id = normalizePathKey(f.path);
+    const label = f.name.replace(/\.md$/i, "") || f.name;
+    return { id, label };
+  });
+
+  const pathSet = new Set(nodes.map((n) => n.id));
+
+  const edges: VaultGraph["edges"] = [];
   const edgeSet = new Set<string>();
 
-  for (const file of files) {
-    const sourceId = file.name.toLowerCase();
-    const links = parseWikilinks(file.content);
+  const addEdge = (source: string, target: string) => {
+    if (!source || !target || source === target) {
+      return;
+    }
+    const k = linkKeyUndirected(source, target);
+    if (edgeSet.has(k)) {
+      return;
+    }
+    edgeSet.add(k);
+    edges.push({ source, target });
+  };
 
-    for (const link of links) {
-      const targetId = link.toLowerCase();
+  for (const file of usable) {
+    const sourcePath = normalizePathKey(file.path);
 
-      if (!nodeMap.has(targetId)) {
-        nodeMap.set(targetId, link);
-        nodes.push({ id: targetId, label: link });
+    for (const link of parseWikilinks(file.content)) {
+      const targetPath = resolveWikilinkToFilePath(link, usable);
+      if (targetPath && pathSet.has(targetPath)) {
+        addEdge(sourcePath, targetPath);
       }
+    }
 
-      if (sourceId === targetId) {
-        continue;
-      }
-
-      const edgeKey =
-        sourceId < targetId
-          ? `${sourceId}::${targetId}`
-          : `${targetId}::${sourceId}`;
-
-      if (!edgeSet.has(edgeKey)) {
-        edgeSet.add(edgeKey);
-        edges.push({ source: sourceId, target: targetId });
+    for (const raw of extractRelatedVaultPathsFromMarkdown(file.content)) {
+      const targetPath = normalizePathKey(raw);
+      if (pathSet.has(targetPath)) {
+        addEdge(sourcePath, targetPath);
       }
     }
   }
