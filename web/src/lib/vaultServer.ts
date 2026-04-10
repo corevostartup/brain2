@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { FolderTreeNode, VaultConversation, VaultGraph } from "@/lib/vault";
 import {
+  isCentralBrainHubMarkdownPath,
   VAULT_LOOSE_MEMORIES_FOLDER_NAME,
   VAULT_MEMORIES_FOLDER_NOTE_BASENAME,
 } from "@/lib/brain2CentralFolder";
@@ -214,9 +215,14 @@ async function ensureMemoriesFolderHubMarkdownIfNeeded(): Promise<void> {
   await ensureMarkdownCorrelationWikilink(memoriesMd, central);
 }
 
-async function readFolderTreeFromPath(dirPath: string): Promise<FolderTreeNode[]> {
+async function readFolderTreeFromPath(
+  dirPath: string,
+  depth = 0,
+  centralName: string | null = null,
+): Promise<FolderTreeNode[]> {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
   const folders: FolderTreeNode[] = [];
+  const central = centralName?.trim() ?? "";
 
   for (const entry of entries) {
     if (entry.name.startsWith(".")) {
@@ -226,8 +232,20 @@ async function readFolderTreeFromPath(dirPath: string): Promise<FolderTreeNode[]
     const fullPath = path.join(dirPath, entry.name);
 
     if (entry.isDirectory()) {
+      if (depth === 0) {
+        if (central && entry.name.localeCompare(central, undefined, { sensitivity: "base" }) === 0) {
+          continue;
+        }
+        if (
+          entry.name.localeCompare(VAULT_LOOSE_MEMORIES_FOLDER_NAME, undefined, {
+            sensitivity: "base",
+          }) === 0
+        ) {
+          continue;
+        }
+      }
       try {
-        const children = await readFolderTreeFromPath(fullPath);
+        const children = await readFolderTreeFromPath(fullPath, depth + 1, centralName);
         folders.push({ name: entry.name, kind: "folder", children });
       } catch {
         folders.push({ name: entry.name, kind: "folder", children: [] });
@@ -292,9 +310,15 @@ export async function getPresetVaultData(): Promise<{
   folders: FolderTreeNode[];
   graph: VaultGraph;
   conversations: VaultConversation[];
+  /** Nome da pasta-central (ficheiro `.brain2-central-folder-name` na raiz do preset). */
+  centralBrainFolderName: string | null;
 }> {
-  const folders = await readFolderTreeFromPath(PRESET_VAULT_PATH);
-  const markdownFiles = await readAllMarkdownFilesFromPath(PRESET_VAULT_PATH);
+  const centralBrainFolderName = await readPresetCentralBrainFolderName();
+  const folders = await readFolderTreeFromPath(PRESET_VAULT_PATH, 0, centralBrainFolderName);
+  const rawMarkdownFiles = await readAllMarkdownFilesFromPath(PRESET_VAULT_PATH);
+  const markdownFiles = rawMarkdownFiles.filter(
+    (f) => !isCentralBrainHubMarkdownPath(f.path, centralBrainFolderName),
+  );
   const graph = buildGraphFromMarkdownFiles(markdownFiles);
   const conversations = buildConversationsFromMarkdownFiles(markdownFiles);
 
@@ -303,6 +327,7 @@ export async function getPresetVaultData(): Promise<{
     folders,
     graph,
     conversations,
+    centralBrainFolderName,
   };
 }
 

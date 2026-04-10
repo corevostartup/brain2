@@ -83,6 +83,25 @@ export function shouldHideRootVaultFolderName(
 }
 
 /**
+ * `Pasta/Pasta.md` (ficheiro homónimo da pasta) — nota de correlação, oculta na lista de conversas.
+ * Inclui `Memories/Memories.md` (também filtrado por `isMemoriesHubNotePath` quando aplicável).
+ */
+export function isFolderHubCorrelationNotePath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, "/").trim();
+  if (!normalized.toLowerCase().endsWith(".md")) {
+    return false;
+  }
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length < 2) {
+    return false;
+  }
+  const fileName = segments[segments.length - 1];
+  const parentFolderName = segments[segments.length - 2];
+  const fileBaseName = fileName.slice(0, -3);
+  return fileBaseName.localeCompare(parentFolderName, undefined, { sensitivity: "base" }) === 0;
+}
+
+/**
  * Garante `rootHandle/Nome/` e `rootHandle/Nome/Nome.md` (File System Access API).
  */
 export async function ensureCentralBrainFolderOnDirectoryHandle(

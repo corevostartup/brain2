@@ -1218,7 +1218,8 @@ struct WebView: NSViewRepresentable {
                 _ = fileManager.createFile(atPath: folderCorrelationURL.path, contents: Data(), attributes: nil)
             }
 
-            let alreadyCorrelated = parseWikilinks(from: markdown).contains {
+            let bodyForLinkCheck = stripYamlFrontmatter(from: markdown)
+            let alreadyCorrelated = parseWikilinks(from: bodyForLinkCheck).contains {
                 $0.caseInsensitiveCompare(folderName) == .orderedSame
             }
             if alreadyCorrelated {
@@ -1948,12 +1949,16 @@ struct WebView: NSViewRepresentable {
             let graph = buildGraph(from: markdownFiles)
             let conversations = buildConversations(from: markdownFiles)
 
-            return [
+            var payload: [String: Any] = [
                 "path": rootURL.path,
                 "folders": folders.map(\.asJSONObject),
                 "graph": graph,
                 "conversations": conversations,
             ]
+            if let cn = centralName, !cn.isEmpty {
+                payload["centralBrainFolderName"] = cn
+            }
+            return payload
         }
 
         private func publish(payload: [String: Any], onJavaScriptEvaluated: (@Sendable () -> Void)? = nil) {
@@ -2208,7 +2213,9 @@ struct WebView: NSViewRepresentable {
         }
 
         private func buildConversations(from files: [MarkdownFile]) -> [[String: Any]] {
-            files
+            let memoriesHub = "\(Self.memoriesFolderName)/\(Self.memoriesNoteFileName)"
+            return files
+                .filter { $0.path.caseInsensitiveCompare(memoriesHub) != .orderedSame }
                 .sorted(by: { $0.modifiedAt > $1.modifiedAt })
                 .map { file in
                     [

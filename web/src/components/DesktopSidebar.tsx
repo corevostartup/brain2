@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { formatConversationDisplayTitle, type FolderTreeNode, type VaultConversation } from "@/lib/vault";
 import {
+  isFolderHubCorrelationNotePath,
   loadCentralBrainNameFromStorage,
   VAULT_LOOSE_MEMORIES_FOLDER_NAME,
 } from "@/lib/brain2CentralFolder";
@@ -114,24 +115,6 @@ function isValidAvatarPhotoURL(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-function isFolderCorrelationConversationPath(conversationPath: string): boolean {
-  const normalizedPath = conversationPath.replace(/\\/g, "/").trim();
-  if (!normalizedPath.toLowerCase().endsWith(".md")) {
-    return false;
-  }
-
-  const segments = normalizedPath.split("/").filter(Boolean);
-  if (segments.length < 2) {
-    return false;
-  }
-
-  const fileName = segments[segments.length - 1];
-  const parentFolderName = segments[segments.length - 2];
-  const fileBaseName = fileName.slice(0, -3);
-
-  return fileBaseName.toLowerCase() === parentFolderName.toLowerCase();
 }
 
 type DesktopSidebarProps = {
@@ -643,7 +626,7 @@ export default function DesktopSidebar({
 
     const visibleConversations = scoped.filter(
       (conversation) =>
-        !isFolderCorrelationConversationPath(conversation.path) &&
+        !isFolderHubCorrelationNotePath(conversation.path) &&
         !isMemoriesHubNotePath(conversation.path),
     );
 

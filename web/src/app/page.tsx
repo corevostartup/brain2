@@ -50,6 +50,7 @@ import {
   fingerprintNativeVaultState,
 } from "@/lib/nativeVaultPayload";
 import {
+  loadCentralBrainNameFromStorage,
   saveCentralBrainNameToStorage,
   VAULT_LOOSE_MEMORIES_FOLDER_NAME,
 } from "@/lib/brain2CentralFolder";
@@ -72,6 +73,7 @@ type PresetVaultResponse = {
   folders: FolderTreeNode[];
   graph: VaultGraph;
   conversations: VaultConversation[];
+  centralBrainFolderName?: string | null;
 };
 
 type VaultMutationPayload =
@@ -111,6 +113,7 @@ type NativeVaultPayload = {
   folders?: FolderTreeNode[];
   graph?: VaultGraph | null;
   conversations?: VaultConversation[];
+  centralBrainFolderName?: string;
 };
 
 type NativeBridge = {
@@ -632,9 +635,15 @@ export default function Home() {
       folders?: FolderTreeNode[];
       graph?: VaultGraph | null;
       conversations?: VaultConversation[];
+      centralBrainFolderName?: string | null;
     },
     options?: { markAsNative?: boolean; markAsCloud?: boolean }
   ) => {
+    const centralFromPayload = data.centralBrainFolderName?.trim();
+    if (centralFromPayload) {
+      saveCentralBrainNameToStorage(centralFromPayload);
+    }
+
     const nextFolders = data.folders ?? [];
     const nextConversations = data.conversations ?? [];
     const nextGraph = normalizeGraph(data.graph, nextConversations);
@@ -718,6 +727,7 @@ export default function Home() {
                 folders: data.folders,
                 graph: data.graph,
                 conversations: data.conversations,
+                centralBrainFolderName: loadCentralBrainNameFromStorage(),
               },
               { markAsNative: false, markAsCloud: true }
             );
@@ -753,6 +763,7 @@ export default function Home() {
           folders: data.folders,
           graph: data.graph,
           conversations: data.conversations,
+          centralBrainFolderName: data.centralBrainFolderName ?? null,
         },
         { markAsNative: false, markAsCloud: false }
       );
@@ -814,6 +825,7 @@ export default function Home() {
           folders: state.folders,
           graph,
           conversations: state.conversations,
+          centralBrainFolderName: state.centralBrainFolderName,
         },
         { markAsNative: true, markAsCloud: false }
       );
@@ -922,6 +934,7 @@ export default function Home() {
           folders: data.folders,
           graph: data.graph,
           conversations: data.conversations,
+          centralBrainFolderName: data.centralBrainFolderName ?? null,
         },
         { markAsNative: false, markAsCloud: false }
       );
