@@ -1,29 +1,18 @@
 import { parseWikiLinksFromText } from "@/ancc/models/link";
 import {
+  extractRelatedVaultPathsFromMarkdown,
+  stripYamlFrontmatter,
+} from "@/lib/markdownFrontmatter";
+import {
   formatConversationDisplayTitle,
   type VaultConversation,
   type VaultGraph,
 } from "@/lib/vault";
 
+export { extractRelatedVaultPathsFromMarkdown } from "@/lib/markdownFrontmatter";
+
 function normalizePath(p: string): string {
   return p.replace(/\\/g, "/").trim().toLowerCase();
-}
-
-/** Extrai `vault_path` do frontmatter ANCC (ligações conversa ↔ conversa por relevância). */
-export function extractRelatedVaultPathsFromMarkdown(content: string): string[] {
-  if (!content.includes("brain2_ancc")) {
-    return [];
-  }
-  const paths: string[] = [];
-  const re = /vault_path:\s*"([^"]+)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    const p = m[1].replace(/\\/g, "/").trim();
-    if (p) {
-      paths.push(p);
-    }
-  }
-  return paths;
 }
 
 /**
@@ -104,8 +93,9 @@ export function buildConversationOnlyVaultGraph(conversations: VaultConversation
   for (const c of conversations) {
     const sourceId = c.id;
     const body = c.content ?? "";
+    const bodyWithoutFrontmatter = stripYamlFrontmatter(body);
 
-    for (const link of parseWikiLinksFromText(body)) {
+    for (const link of parseWikiLinksFromText(bodyWithoutFrontmatter)) {
       const targetId = resolveWikilinkToConversationId(link, conversations);
       if (targetId && targetId !== sourceId) {
         addEdge(sourceId, targetId);

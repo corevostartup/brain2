@@ -3,7 +3,10 @@ import {
   VAULT_LOOSE_MEMORIES_FOLDER_NAME,
   VAULT_MEMORIES_FOLDER_NOTE_BASENAME,
 } from "@/lib/brain2CentralFolder";
-import { extractRelatedVaultPathsFromMarkdown } from "@/lib/vaultConversationGraph";
+import {
+  extractRelatedVaultPathsFromMarkdown,
+  stripYamlFrontmatter,
+} from "@/lib/markdownFrontmatter";
 
 export type VaultMarkdownFile = {
   name: string;
@@ -24,6 +27,7 @@ export function isMemoriesHubNotePath(relativePath: string): boolean {
 function parseWikilinks(content: string): string[] {
   const links: string[] = [];
   let match: RegExpExecArray | null;
+  WIKILINK_REGEX.lastIndex = 0;
 
   while ((match = WIKILINK_REGEX.exec(content)) !== null) {
     const target = match[1].trim();
@@ -116,7 +120,7 @@ export function buildGraphFromMarkdownFiles(files: VaultMarkdownFile[]): VaultGr
   for (const file of usable) {
     const sourcePath = normalizePathKey(file.path);
 
-    for (const link of parseWikilinks(file.content)) {
+    for (const link of parseWikilinks(stripYamlFrontmatter(file.content))) {
       const targetPath = resolveWikilinkToFilePath(link, usable);
       if (targetPath && pathSet.has(targetPath)) {
         addEdge(sourcePath, targetPath);

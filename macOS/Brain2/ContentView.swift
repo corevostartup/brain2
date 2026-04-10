@@ -2094,40 +2094,109 @@ struct WebView: NSViewRepresentable {
             }
         }
 
-        private func buildGraph(from files: [MarkdownFile]) -> [String: Any] {
-            var nodeMap: [String: String] = [:]
-            for file in files {
-                nodeMap[file.name.lowercased()] = file.name
+        /// Remove o primeiro `---` YAML para o grafo não apanhar `[[tópicos]]` do frontmatter ANCC.
+        private func stripYamlFrontmatter(from markdown: String) -> String {
+            guard markdown.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("---") else {
+                return markdown
             }
+            guard let regex = try? NSRegularExpression(pattern: #"^---\r?\n[\s\S]*?\r?\n---\r?\n?"#, options: []) else {
+                return markdown
+            }
+            let ns = markdown as NSString
+            let full = NSRange(location: 0, length: ns.length)
+            guard let match = regex.firstMatch(in: markdown, options: [], range: full), match.range.location == 0 else {
+                return markdown
+            }
+            let end = match.range.location + match.range.length
+            guard end <= ns.length else { return markdown }
+            return ns.substring(from: end)
+        }
 
-            var nodes: [[String: String]] = nodeMap.map { key, value in
-                ["id": key, "label": value]
+        private func normalizeGraphPathKey(_ path: String) -> String {
+            path.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        /// `vault_path` no frontmatter ANCC (liga conversa a conversa).
+        private func extractRelatedVaultPaths(from markdown: String) -> [String] {
+            guard markdown.contains("brain2_ancc") else { return [] }
+            guard let regex = try? NSRegularExpression(pattern: #"vault_path:\s*"([^"]+)""#, options: []) else {
+                return []
+            }
+            let ns = markdown as NSString
+            let range = NSRange(location: 0, length: ns.length)
+            let matches = regex.matches(in: markdown, options: [], range: range)
+            return matches.compactMap { m in
+                guard m.numberOfRanges > 1 else { return nil }
+                let raw = ns.substring(with: m.range(at: 1)).replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: .whitespacesAndNewlines)
+                return raw.isEmpty ? nil : raw
+            }
+        }
+
+        private func simplifiedConversationStem(_ stem: String) -> String {
+            guard let regex = try? NSRegularExpression(pattern: #"\s+-\s*\([^)]*\)\s*$"#, options: []) else {
+                return stem
+            }
+            let ns = stem as NSString
+            let range = NSRange(location: 0, length: ns.length)
+            guard let match = regex.firstMatch(in: stem, options: [], range: range) else { return stem }
+            return ns.substring(with: NSRange(location: 0, length: match.range.location)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        /// Resolve `[[wikilink]]` para o path normalizado de outro ficheiro do vault (sem nós órfãos).
+        private func resolveWikilinkToFilePath(linkText: String, in files: [MarkdownFile]) -> String? {
+            let t = linkText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !t.isEmpty else { return nil }
+
+            for f in files {
+                let pathNorm = normalizeGraphPathKey(f.path)
+                let stem = f.name.lowercased()
+                let lastComp = (f.path as NSString).lastPathComponent.lowercased()
+                let lastStem = (lastComp as NSString).deletingPathExtension.lowercased()
+
+                if stem == t || lastStem == t || lastComp == t {
+                    return pathNorm
+                }
+                let simplified = simplifiedConversationStem(stem).lowercased()
+                if !simplified.isEmpty, simplified == t {
+                    return pathNorm
+                }
+            }
+            return nil
+        }
+
+        /// Um nó por nota `.md`; arestas só entre conversas quando o wikilink (corpo, sem YAML) ou o ANCC `vault_path` liga a outra nota.
+        private func buildGraph(from files: [MarkdownFile]) -> [String: Any] {
+            let hubMemories = "\(Self.memoriesFolderName)/\(Self.memoriesNoteFileName)"
+            let usable = files.filter { $0.path.caseInsensitiveCompare(hubMemories) != .orderedSame }
+
+            let pathSet = Set(usable.map { normalizeGraphPathKey($0.path) })
+            var nodes: [[String: String]] = usable.map { f in
+                ["id": normalizeGraphPathKey(f.path), "label": f.name]
             }
 
             var edges: [[String: String]] = []
             var edgeKeys = Set<String>()
 
-            for file in files {
-                let sourceID = file.name.lowercased()
-                let links = parseWikilinks(from: file.content)
+            func addEdge(source: String, target: String) {
+                guard source != target, pathSet.contains(source), pathSet.contains(target) else { return }
+                let key = source < target ? "\(source)|\(target)" : "\(target)|\(source)"
+                guard !edgeKeys.contains(key) else { return }
+                edgeKeys.insert(key)
+                edges.append(["source": source, "target": target])
+            }
 
-                for link in links {
-                    let targetID = link.lowercased()
-
-                    if nodeMap[targetID] == nil {
-                        nodeMap[targetID] = link
-                        nodes.append(["id": targetID, "label": link])
+            for file in usable {
+                let source = normalizeGraphPathKey(file.path)
+                let bodyForLinks = stripYamlFrontmatter(from: file.content)
+                for link in parseWikilinks(from: bodyForLinks) {
+                    if let target = resolveWikilinkToFilePath(linkText: link, in: usable) {
+                        addEdge(source: source, target: target)
                     }
-
-                    if sourceID == targetID {
-                        continue
-                    }
-
-                    let edgeKey = sourceID < targetID ? "\(sourceID)::\(targetID)" : "\(targetID)::\(sourceID)"
-
-                    if !edgeKeys.contains(edgeKey) {
-                        edgeKeys.insert(edgeKey)
-                        edges.append(["source": sourceID, "target": targetID])
+                }
+                for raw in extractRelatedVaultPaths(from: file.content) {
+                    let target = normalizeGraphPathKey(raw)
+                    if pathSet.contains(target) {
+                        addEdge(source: source, target: target)
                     }
                 }
             }
