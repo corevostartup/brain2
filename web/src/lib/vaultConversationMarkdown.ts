@@ -38,7 +38,7 @@ function buildAnccYamlBlock(
 ): string {
   const lines: string[] = [];
   const filtered = filterCorrelationsForCurrentVaultFile(
-    result.assembled.vaultCorrelations,
+    result.assembled.vaultCorrelationsPersisted,
     currentVaultPath
   ).slice(0, MAX_RELATED);
 

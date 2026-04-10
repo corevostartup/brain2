@@ -9,6 +9,7 @@ export function assembleContext(input: {
   links: MemoryLink[];
   memoryClass: MemoryClass;
   vaultCorrelations: VaultCorrelationHit[];
+  vaultCorrelationsPersisted: VaultCorrelationHit[];
   recentBullets: string[];
 }): AssembledContext {
   const sorted = [...input.links].sort((a, b) => b.strength - a.strength);
@@ -26,6 +27,7 @@ export function assembleContext(input: {
     priorityMemoryClass: input.memoryClass,
     recentContextBullets: input.recentBullets,
     vaultCorrelations: input.vaultCorrelations,
+    vaultCorrelationsPersisted: input.vaultCorrelationsPersisted,
     behavioralGuidance: [...DEFAULT_BEHAVIORAL_GUIDANCE],
   };
 }

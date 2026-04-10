@@ -20,7 +20,15 @@ export type AssembledContext = {
   linksWithStrength: Array<{ link: string; strength: number; linkType: MemoryLink["type"] }>;
   priorityMemoryClass: MemoryClass;
   recentContextBullets: string[];
+  /**
+   * Notas do vault para contexto deste turno (limiar mais baixo).
+   * Inclui correspondências mais fracas que **não** entram em `vaultCorrelationsPersisted`.
+   */
   vaultCorrelations: VaultCorrelationHit[];
+  /**
+   * Subconjunto assertivo — gravado em `related_vault_notes` / arestas no grafo de conversas.
+   */
+  vaultCorrelationsPersisted: VaultCorrelationHit[];
   behavioralGuidance: string[];
 };
 

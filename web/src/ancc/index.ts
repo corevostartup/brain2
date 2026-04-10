@@ -41,6 +41,7 @@ export { LINK_STRENGTH_WEIGHTS, MIN_CORRELATION_TO_LINK } from "@/ancc/rules/lin
 export { PLASTICITY } from "@/ancc/rules/plasticity.rules";
 export { OUTCOME_WEIGHTING } from "@/ancc/rules/outcome.rules";
 export { ANCC_CONTEXT_MARKERS } from "@/ancc/rules/prompt-injection.rules";
+export { CORRELATION } from "@/ancc/rules/correlation.rules";
 
 export {
   processInteraction,
@@ -52,6 +53,7 @@ export {
 export type { VaultFileSnapshot } from "@/ancc/pipeline/vault-correlation";
 export {
   correlateVaultFiles,
+  splitVaultHitsByPersistence,
   buildVaultIndex,
   noteTitleFromFileName,
   scoreTopicFileCorrelation,

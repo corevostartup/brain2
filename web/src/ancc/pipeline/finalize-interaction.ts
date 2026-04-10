@@ -49,7 +49,7 @@ export function finalizeInteractionAfterResponse(opts: FinalizeInteractionOption
   reinforceVaultPathAffinity(
     opts.plasticityState,
     analysis.outcome,
-    opts.preInteractionResult.assembled.vaultCorrelations.map((h) => h.path)
+    opts.preInteractionResult.assembled.vaultCorrelationsPersisted.map((h) => h.path)
   );
 
   const confidence = analysis.confidence;

@@ -1,5 +1,6 @@
 import { parseWikiLinksFromText } from "@/ancc/models/link";
 import type { VaultCorrelationHit } from "@/ancc/models/context";
+import { CORRELATION } from "@/ancc/rules/correlation.rules";
 
 export type VaultFileSnapshot = {
   path: string;
@@ -72,18 +73,45 @@ export function scoreTopicFileCorrelation(
   }
 
   const hits = countSubstantiveOverlap(topicLower, body);
-  score += Math.min(0.28, hits * 0.07);
+  score += Math.min(0.2, hits * 0.045);
 
   const tokenOverlap = topicLower.split(/\s+/).filter((w) => w.length > 2 && body.includes(w)).length;
-  score += Math.min(0.15, tokenOverlap * 0.04);
+  score += Math.min(0.08, tokenOverlap * 0.022);
+
+  const hasTitleSignal =
+    titleLower === topicLower ||
+    titleLower.includes(topicLower) ||
+    topicLower.includes(titleLower);
+  const hasWikiSignal = index.wikiTargetsLower.has(topicLower);
+  const weakBodyOnly = !hasTitleSignal && !index.titlesLower.has(topicLower) && !hasWikiSignal;
+
+  if (weakBodyOnly && score > 0.32) {
+    score = 0.28 + (score - 0.32) * 0.55;
+  }
 
   return Math.min(1, score);
+}
+
+/**
+ * Parte hits em contexto (LLM) vs persistência (grafo / YAML), por relevância.
+ */
+export function splitVaultHitsByPersistence(
+  hits: VaultCorrelationHit[]
+): { forContext: VaultCorrelationHit[]; forPersistence: VaultCorrelationHit[] } {
+  const sorted = [...hits].sort((a, b) => b.relevance - a.relevance);
+  const forContext = sorted
+    .filter((h) => h.relevance >= CORRELATION.minContext)
+    .slice(0, CORRELATION.maxHitsContext);
+  const forPersistence = sorted
+    .filter((h) => h.relevance >= CORRELATION.minPersist)
+    .slice(0, CORRELATION.maxHitsPersist);
+  return { forContext, forPersistence };
 }
 
 export function correlateVaultFiles(
   topics: string[],
   files: VaultFileSnapshot[],
-  minRelevance = 0.18
+  minRelevance: number = CORRELATION.minLexicalCandidate
 ): VaultCorrelationHit[] {
   if (files.length === 0 || topics.length === 0) {
     return [];

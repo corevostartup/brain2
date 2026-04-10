@@ -13,7 +13,12 @@ import {
   applyVaultPathAffinityToHits,
   type PlasticityAgentState,
 } from "@/ancc/agents/plasticity-agent";
-import { correlateVaultFiles, type VaultFileSnapshot, buildVaultIndex } from "@/ancc/pipeline/vault-correlation";
+import {
+  correlateVaultFiles,
+  splitVaultHitsByPersistence,
+  type VaultFileSnapshot,
+  buildVaultIndex,
+} from "@/ancc/pipeline/vault-correlation";
 import { newInteractionId } from "@/ancc/models/metadata";
 
 export type TopicRecurrenceTracker = {
@@ -56,10 +61,17 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
   const raw = interpretUserInput(opts.userMessage);
   const vaultTitles = opts.vaultFiles.map((f) => f.name.replace(/\.md$/i, ""));
   const topicSource = [raw.normalizedText, opts.sessionSummary?.trim() ?? ""].filter(Boolean).join("\n");
-  const topics = extractTopics({
+  const topicsFromQuery = extractTopics({
+    text: raw.normalizedText,
+    vaultNoteTitles: vaultTitles,
+  });
+  const topicsExpanded = extractTopics({
     text: topicSource,
     vaultNoteTitles: vaultTitles,
   });
+  /** Tópicos ancorados na pergunta atual; evita correlacionar o vault inteiro por ruído do resumo de sessão. */
+  const topics =
+    topicsFromQuery.length > 0 ? topicsFromQuery : topicsExpanded.slice(0, 12);
 
   const recurrenceScore = bumpRecurrence(opts.recurrenceTracker, topics);
   let vaultHits: VaultCorrelationHit[];
@@ -69,10 +81,11 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
     vaultHits = correlateVaultFiles(topics, opts.vaultFiles);
   }
   vaultHits = applyVaultPathAffinityToHits(vaultHits, opts.plasticityState.vaultPathAffinity);
+  const { forContext: vaultForContext, forPersistence: vaultPersisted } = splitVaultHitsByPersistence(vaultHits);
   const index = buildVaultIndex(opts.vaultFiles);
 
   const bestFileRelevanceByTopic = new Map<string, number>();
-  for (const h of vaultHits) {
+  for (const h of vaultPersisted) {
     for (const t of h.matchedTopics) {
       const k = t.toLowerCase();
       const prev = bestFileRelevanceByTopic.get(k) ?? 0;
@@ -129,7 +142,8 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
     topics,
     links,
     memoryClass,
-    vaultCorrelations: vaultHits,
+    vaultCorrelations: vaultForContext,
+    vaultCorrelationsPersisted: vaultPersisted,
     recentBullets,
   });
 

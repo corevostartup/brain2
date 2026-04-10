@@ -24,11 +24,24 @@ export function buildHiddenSystemPromptBlock(ctx: AssembledContext): string {
       lines.push(`- ${row.link} (${row.strength.toFixed(2)}, ${row.linkType})`);
     }
   }
-  lines.push("Vault-aligned notes (correlação com ficheiros existentes):");
-  if (ctx.vaultCorrelations.length === 0) {
-    lines.push("- (nenhuma nota do vault acima do limiar nesta interação)");
+  lines.push("Vault — correlações assertivas (candidatas a ligação persistente / grafo):");
+  if (ctx.vaultCorrelationsPersisted.length === 0) {
+    lines.push("- (nenhuma acima do limiar assertivo para esta pergunta)");
   } else {
-    for (const h of ctx.vaultCorrelations.slice(0, 12)) {
+    for (const h of ctx.vaultCorrelationsPersisted.slice(0, 10)) {
+      lines.push(formatCorrelationLine(h));
+      if (h.snippet?.trim()) {
+        lines.push(`  excerpt: ${h.snippet.trim().slice(0, 280)}`);
+      }
+    }
+  }
+  const persistPaths = new Set(ctx.vaultCorrelationsPersisted.map((h) => h.path));
+  const supplemental = ctx.vaultCorrelations.filter((h) => !persistPaths.has(h.path));
+  lines.push("Vault — contexto adicional (só este turno, correlação mais fraca):");
+  if (supplemental.length === 0) {
+    lines.push("- (nenhuma)");
+  } else {
+    for (const h of supplemental.slice(0, 10)) {
       lines.push(formatCorrelationLine(h));
       if (h.snippet?.trim()) {
         lines.push(`  excerpt: ${h.snippet.trim().slice(0, 280)}`);
