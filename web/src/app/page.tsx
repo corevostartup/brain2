@@ -77,6 +77,7 @@ import {
   applyPersonalityUpdatesFromUserMessage,
   buildUserPersonalitySystemAddition,
   loadUserPersonalityProfile,
+  normalizeCustomPersonality,
   saveUserPersonalityProfile,
   type UserPersonalityProfile,
 } from "@/lib/userPersonalityProfile";
@@ -1333,6 +1334,20 @@ export default function Home() {
     setReturnToYourBrainOnConversationClose(false);
   }, [returnToYourBrainOnConversationClose]);
 
+  const handleSaveCustomPersonalityNotes = useCallback((raw: string) => {
+    const normalized = normalizeCustomPersonality(raw);
+    setUserPersonalityProfile((prev) => {
+      const next: UserPersonalityProfile = { ...prev };
+      if (normalized) {
+        next.customPersonality = normalized;
+      } else {
+        delete next.customPersonality;
+      }
+      saveUserPersonalityProfile(next);
+      return next;
+    });
+  }, []);
+
   const persistChatConversation = useCallback((params: {
     sessionId: string;
     startedAt: number;
@@ -1929,6 +1944,8 @@ export default function Home() {
               void loadPresetVaultData({ force: true });
             }}
             onForceOnboarding={handleForceOnboarding}
+            customPersonalityNotes={userPersonalityProfile.customPersonality ?? ""}
+            onSaveCustomPersonalityNotes={handleSaveCustomPersonalityNotes}
           />
         ) : (
           <>

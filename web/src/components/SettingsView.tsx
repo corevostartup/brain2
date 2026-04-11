@@ -21,6 +21,7 @@ import {
   type CloudProvider,
   type VaultStorageMode,
 } from "@/lib/vaultCloudConfig";
+import { MAX_CUSTOM_PERSONALITY_CHARS } from "@/lib/userPersonalityProfile";
 
 type SettingsViewProps = {
   onClose: () => void;
@@ -31,6 +32,9 @@ type SettingsViewProps = {
   onCloudVaultSaved?: () => void;
   /** Fase de testes: reabre o onboarding (web ou overlay nativo). */
   onForceOnboarding?: () => void;
+  /** Texto livre de personalidade (persistido com os traços 0–100). */
+  customPersonalityNotes?: string;
+  onSaveCustomPersonalityNotes?: (value: string) => void;
 };
 
 type NativeBridge = {
@@ -106,6 +110,8 @@ export default function SettingsView({
   nativeVaultPath,
   onCloudVaultSaved,
   onForceOnboarding,
+  customPersonalityNotes = "",
+  onSaveCustomPersonalityNotes,
 }: SettingsViewProps) {
   const [vaultPath, setVaultPath] = useState<string>(() => (
     typeof window === "undefined" ? "" : (loadVaultPath() ?? "")
@@ -125,12 +131,18 @@ export default function SettingsView({
   const [googleDriveSearch, setGoogleDriveSearch] = useState("");
   const [googleDrivePickerError, setGoogleDrivePickerError] = useState("");
   const [googleDriveSelectedFolderId, setGoogleDriveSelectedFolderId] = useState<string | null>(null);
+  const [personalityDraft, setPersonalityDraft] = useState(customPersonalityNotes);
+  const [personalitySaveStatus, setPersonalitySaveStatus] = useState<"idle" | "saved">("idle");
   const pendingHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
   const displayedVaultPath = nativeVaultPath?.trim() || (vaultHandle ? vaultHandle.name : vaultPath);
 
   useEffect(() => {
     pendingHandleRef.current = vaultHandle;
   }, [vaultHandle]);
+
+  useEffect(() => {
+    setPersonalityDraft(customPersonalityNotes);
+  }, [customPersonalityNotes]);
 
   useEffect(() => {
     const detectBridge = () => {
@@ -699,6 +711,48 @@ export default function SettingsView({
           </div>
         )}
 
+        <section className="settings-section appearance-section personality-section">
+          <h3>Personalidade</h3>
+          <p className="settings-description">
+            Descreva o tom, características ou estilos que quiser (incluindo os que não estão nos traços
+            numéricos do chat). O texto é guardado neste dispositivo e aplicado às regras do assistente.
+          </p>
+          <textarea
+            className="personality-free-text"
+            value={personalityDraft}
+            onChange={(event) => {
+              setPersonalityDraft(event.target.value.slice(0, MAX_CUSTOM_PERSONALITY_CHARS));
+              if (personalitySaveStatus !== "idle") {
+                setPersonalitySaveStatus("idle");
+              }
+            }}
+            placeholder="Ex.: caloroso mas directo; gostos de referências a cinema; evitar jargão desnecessário…"
+            spellCheck={true}
+            rows={7}
+            maxLength={MAX_CUSTOM_PERSONALITY_CHARS}
+            aria-label="Personalidade em texto livre"
+          />
+          <div className="personality-free-text-footer">
+            <span className="personality-char-count">
+              {personalityDraft.length} / {MAX_CUSTOM_PERSONALITY_CHARS}
+            </span>
+            <button
+              type="button"
+              className="personality-save-btn"
+              onClick={() => {
+                onSaveCustomPersonalityNotes?.(personalityDraft);
+                setPersonalitySaveStatus("saved");
+                window.setTimeout(() => setPersonalitySaveStatus("idle"), 2200);
+              }}
+            >
+              Guardar personalidade
+            </button>
+          </div>
+          {personalitySaveStatus === "saved" ? (
+            <p className="vault-success-hint">Personalidade guardada.</p>
+          ) : null}
+        </section>
+
         <section className="settings-section appearance-section">
           <h3>Appearance</h3>
           <p className="settings-description">
@@ -809,6 +863,64 @@ export default function SettingsView({
         .appearance-section {
           padding-top: 18px;
           border-top: 1px solid var(--bar-border);
+        }
+
+        .personality-free-text {
+          width: 100%;
+          min-height: 140px;
+          box-sizing: border-box;
+          padding: 10px 12px;
+          border: 1px solid var(--bar-border);
+          border-radius: 10px;
+          background: rgba(255, 255, 255, 0.03);
+          color: var(--foreground);
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          line-height: 1.45;
+          resize: vertical;
+        }
+
+        .personality-free-text:focus {
+          outline: none;
+          border-color: var(--bar-border-hover);
+        }
+
+        .personality-free-text::placeholder {
+          color: var(--muted);
+          opacity: 0.75;
+        }
+
+        .personality-free-text-footer {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .personality-char-count {
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          color: var(--muted);
+        }
+
+        .personality-save-btn {
+          height: 34px;
+          padding: 0 14px;
+          border: 1px solid var(--bar-border);
+          border-radius: 9px;
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--foreground);
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: background 0.15s ease, border-color 0.15s ease;
+        }
+
+        .personality-save-btn:hover {
+          background: var(--pill-active);
+          border-color: var(--bar-border-hover);
         }
 
         .theme-mode-grid {

@@ -5,7 +5,8 @@
  * Atualização: o utilizador pode enviar percentagens explícitas **ou** descrever o tom em linguagem
  * natural (ex.: «muito humorada», «pouca ironia», «sarcasmo, humor e ironia»); o cliente infere
  * valores 0–100 (incluindo menção explícita de palavras‑chave sem número) e grava no mesmo
- * armazenamento — antes de cada envio (`saveUserPersonalityProfile` em `page.tsx`).
+ * armazenamento — antes de cada envio (`saveUserPersonalityProfile` em `page.tsx`). Em Configurações,
+ * o utilizador pode acrescentar texto livre (`customPersonality`) para qualquer característica.
  */
 
 export const USER_PERSONALITY_STORAGE_KEY = "brain2-user-personality-profile";
@@ -14,7 +15,25 @@ export type PersonalityTraitId = "sarcasm" | "humor" | "creativity" | "boldness"
 
 export type UserPersonalityProfile = {
   traits: Partial<Record<PersonalityTraitId, number>>;
+  /**
+   * Texto livre: estilo, características além dos 5 traços, metas de tom — persistido e injetado no system.
+   */
+  customPersonality?: string;
 };
+
+/** Limite de caracteres do campo livre (Configurações). */
+export const MAX_CUSTOM_PERSONALITY_CHARS = 2500;
+
+export function normalizeCustomPersonality(raw: string | undefined | null): string {
+  if (raw == null || typeof raw !== "string") {
+    return "";
+  }
+  const t = raw.replace(/\r\n/g, "\n").trim();
+  if (t.length === 0) {
+    return "";
+  }
+  return t.slice(0, MAX_CUSTOM_PERSONALITY_CHARS);
+}
 
 const TRAIT_ORDER: PersonalityTraitId[] = [
   "sarcasm",
@@ -51,11 +70,12 @@ export function loadUserPersonalityProfile(): UserPersonalityProfile {
     const raw = window.localStorage.getItem(USER_PERSONALITY_STORAGE_KEY);
     if (!raw) return emptyProfile();
     const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || !("traits" in parsed)) {
+    if (!parsed || typeof parsed !== "object") {
       return emptyProfile();
     }
+    const p = parsed as { traits?: unknown; customPersonality?: unknown };
     const traits: Partial<Record<PersonalityTraitId, number>> = {};
-    const t = (parsed as { traits?: unknown }).traits;
+    const t = p.traits;
     if (t && typeof t === "object") {
       for (const id of TRAIT_ORDER) {
         const v = (t as Record<string, unknown>)[id];
@@ -64,7 +84,13 @@ export function loadUserPersonalityProfile(): UserPersonalityProfile {
         }
       }
     }
-    return { traits };
+    const customNorm =
+      typeof p.customPersonality === "string" ? normalizeCustomPersonality(p.customPersonality) : "";
+    const out: UserPersonalityProfile = { traits };
+    if (customNorm) {
+      out.customPersonality = customNorm;
+    }
+    return out;
   } catch {
     return emptyProfile();
   }
@@ -80,7 +106,11 @@ export function saveUserPersonalityProfile(profile: UserPersonalityProfile): voi
         cleaned.traits[id] = clampPercent(v);
       }
     }
-    if (Object.keys(cleaned.traits).length === 0) {
+    const customNorm = normalizeCustomPersonality(profile.customPersonality);
+    if (customNorm) {
+      cleaned.customPersonality = customNorm;
+    }
+    if (Object.keys(cleaned.traits).length === 0 && !cleaned.customPersonality) {
       window.localStorage.removeItem(USER_PERSONALITY_STORAGE_KEY);
       return;
     }
@@ -90,18 +120,18 @@ export function saveUserPersonalityProfile(profile: UserPersonalityProfile): voi
   }
 }
 
-function mergeTraits(
-  base: Partial<Record<PersonalityTraitId, number>>,
+function mergeTraitPatchIntoProfile(
+  previous: UserPersonalityProfile,
   patch: Partial<Record<PersonalityTraitId, number>>,
 ): UserPersonalityProfile {
-  const traits: Partial<Record<PersonalityTraitId, number>> = { ...base };
+  const traits: Partial<Record<PersonalityTraitId, number>> = { ...previous.traits };
   for (const id of TRAIT_ORDER) {
     const v = patch[id];
     if (typeof v === "number" && Number.isFinite(v)) {
       traits[id] = clampPercent(v);
     }
   }
-  return { traits };
+  return { ...previous, traits };
 }
 
 function profilesEqual(a: UserPersonalityProfile, b: UserPersonalityProfile): boolean {
@@ -110,7 +140,7 @@ function profilesEqual(a: UserPersonalityProfile, b: UserPersonalityProfile): bo
     const bv = b.traits[id];
     if (av !== bv) return false;
   }
-  return true;
+  return normalizeCustomPersonality(a.customPersonality) === normalizeCustomPersonality(b.customPersonality);
 }
 
 type TraitWords = { id: PersonalityTraitId; regex: string };
@@ -410,13 +440,13 @@ export function applyPersonalityUpdatesFromUserMessage(
   if (Object.keys(patch).length === 0) {
     return { next: previous, changed: false };
   }
-  const next = mergeTraits(previous.traits, patch);
+  const next = mergeTraitPatchIntoProfile(previous, patch);
   return { next, changed: !profilesEqual(previous, next) };
 }
 
 /** Linha compacta para behavioral guidance ANCC. */
 export function formatPersonalityForAnccGuidance(profile: UserPersonalityProfile | null): string | null {
-  if (!profile?.traits) return null;
+  if (!profile) return null;
   const parts: string[] = [];
   for (const id of TRAIT_ORDER) {
     const v = profile.traits[id];
@@ -424,8 +454,17 @@ export function formatPersonalityForAnccGuidance(profile: UserPersonalityProfile
       parts.push(`${id}=${v}`);
     }
   }
-  if (parts.length === 0) return null;
-  return `User-defined personality levels (0–100, follow in tone): ${parts.join(", ")}.`;
+  const custom = normalizeCustomPersonality(profile.customPersonality);
+  const segments: string[] = [];
+  if (parts.length > 0) {
+    segments.push(`User-defined personality levels (0–100, follow in tone): ${parts.join(", ")}`);
+  }
+  if (custom) {
+    const snippet = custom.length > 220 ? `${custom.slice(0, 217).trimEnd()}…` : custom;
+    segments.push(`User-defined style notes: ${snippet}`);
+  }
+  if (segments.length === 0) return null;
+  return `${segments.join(". ")}.`;
 }
 
 /**
@@ -433,43 +472,65 @@ export function formatPersonalityForAnccGuidance(profile: UserPersonalityProfile
  */
 export function buildUserPersonalitySystemAddition(profile: UserPersonalityProfile | null): string {
   const traits = profile?.traits ?? {};
+  const custom = normalizeCustomPersonality(profile?.customPersonality);
+  const hasTraitLevels = TRAIT_ORDER.some((id) => typeof traits[id] === "number");
+  const hasCustom = custom.length > 0;
+
   const lines: string[] = [
     "[User personality profile — user-defined, persisted]",
-    "Trait levels use a 0–100 scale (higher = stronger expression of that trait in your voice and stance).",
+    "Slider traits use a 0–100 scale (higher = stronger expression in your voice and stance). Free-text notes below may describe any style goals, including traits not covered by sliders.",
   ];
 
-  const hasAny = TRAIT_ORDER.some((id) => typeof traits[id] === "number");
-  if (!hasAny) {
+  if (!hasTraitLevels && !hasCustom) {
     lines.push(
-      "No custom levels are stored yet; stay balanced until the user sets traits—either explicit percentages (e.g. humor 60%) or natural phrases (e.g. 'muito humor', 'pouco sarcasmo'), which the app maps to 0–100 and persists.",
+      "Nothing is stored yet: no slider levels and no free-text notes. Stay balanced until the user adds text in Settings (personality field) and/or defines the five traits in chat (percentages or natural language).",
     );
     lines.push(
-      "When they ask how your personality is configured, say no custom levels are saved yet and invite them to define traits in numbers or plain language.",
+      "When they ask how your personality is configured, say nothing is saved yet and invite them to use Settings or chat.",
     );
     return lines.join("\n");
   }
 
-  lines.push("Current levels (answer with these exact values when asked):");
-  for (const id of TRAIT_ORDER) {
-    const v = traits[id];
-    if (typeof v === "number") {
-      const m = PERSONALITY_TRAIT_META[id];
-      lines.push(`- ${m.labelEn} (${m.labelPt}): ${v}%`);
+  if (hasTraitLevels) {
+    lines.push("Current slider-based trait levels (answer with these exact values when asked):");
+    for (const id of TRAIT_ORDER) {
+      const v = traits[id];
+      if (typeof v === "number") {
+        const m = PERSONALITY_TRAIT_META[id];
+        lines.push(`- ${m.labelEn} (${m.labelPt}): ${v}%`);
+      }
     }
+    lines.push(
+      "Follow these levels in how you speak: higher sarcasm → sharper ironic edge without cruelty; higher humor → lighter tone where appropriate; higher creativity → more varied angles; higher boldness → more direct opinions; higher stubbornness → firmer polite pushback.",
+    );
+    lines.push(
+      "For slider traits: if they ask for a specific percentage, use the numbers above. If a slider trait was never set, say it is not customized (balanced default).",
+    );
+    lines.push(
+      "They may update slider traits anytime in chat; the app persists interpreted 0–100 values.",
+    );
+    lines.push(
+      "If they describe mood without numbers for a slider trait, the saved numbers above are the app's interpretation—do not contradict them unless blending with free-text notes below.",
+    );
   }
 
-  lines.push(
-    "Follow these levels in how you speak: e.g. higher sarcasm → sharper ironic edge without becoming cruel; higher humor → lighter tone where appropriate; higher creativity → more varied angles; higher boldness → more direct opinions; higher stubbornness → firmer stance when pushing back politely.",
-  );
-  lines.push(
-    "When the user asks how your personality is defined, what the levels are, or asks for a specific trait percentage (e.g. 'qual o meu nível de sarcasmo'), reply clearly listing each stored trait with its percentage in their language. If a trait was never set, say it is not customized (default balanced).",
-  );
-  lines.push(
-    "They may update levels anytime in chat with percentages or natural language; the app persists the latest interpreted 0–100 values—treat what appears here as authoritative.",
-  );
-  lines.push(
-    "If they describe mood without numbers (e.g. 'bem humorada', 'ironias leves'), the saved numbers below are the app's interpretation—do not contradict them.",
-  );
+  if (hasCustom) {
+    lines.push("");
+    lines.push("[User-defined personality notes — free text, authoritative]");
+    lines.push(
+      "The user wrote this in Settings; treat it as equally important as slider levels. It may name characteristics that are not among the five sliders:",
+    );
+    lines.push(custom);
+    lines.push(
+      "Honor this text in tone and stance. If it appears to conflict with slider levels, blend both—the notes capture nuances sliders cannot express.",
+    );
+  }
+
+  if (!hasTraitLevels && hasCustom) {
+    lines.push(
+      "Only free-text notes are stored (no slider traits yet). Follow the notes above. If they ask for slider percentages, say those traits are not set until they define them in chat.",
+    );
+  }
 
   return lines.join("\n");
 }
