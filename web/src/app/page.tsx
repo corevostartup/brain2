@@ -388,6 +388,12 @@ export default function Home() {
   const [vaultPath, setVaultPath] = useState("");
   const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(null);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  /**
+   * Com nota do vault aberta, o utilizador vê primeiro ConversationView (estático).
+   * Após enviar mensagem, passamos a ChatView para o streaming/estado em tempo real —
+   * senão o assistente atualiza em memória mas o ecrã continua no markdown antigo.
+   */
+  const [vaultConversationLiveChat, setVaultConversationLiveChat] = useState(false);
   const [returnToYourBrainOnConversationClose, setReturnToYourBrainOnConversationClose] = useState(false);
   const [hasNativeVaultData, setHasNativeVaultData] = useState(false);
   /** Atualizado em sync dentro de `applyVaultData` para evitar corrida com fetch do preset a sobrescrever o vault WKWebView. */
@@ -624,7 +630,9 @@ export default function Home() {
     : isYourBrainOpen
       ? "brain"
       : selectedConversation
-        ? "conversation"
+        ? vaultConversationLiveChat || chatLoading || Boolean(chatError)
+          ? "chat"
+          : "conversation"
         : isChatOpen || chatMessages.length > 0 || chatLoading || Boolean(chatError)
           ? "chat"
         : "home";
@@ -716,6 +724,7 @@ export default function Home() {
         : null;
     });
     setSelectedConversationId(null);
+    setVaultConversationLiveChat(false);
     setReturnToYourBrainOnConversationClose(false);
     setGraphLoading(false);
     setVaultDataVersion((value) => value + 1);
@@ -918,6 +927,7 @@ export default function Home() {
   useEffect(() => {
     if (selectedConversationId && !selectedConversation) {
       setSelectedConversationId(null);
+      setVaultConversationLiveChat(false);
     }
   }, [selectedConversationId, selectedConversation]);
 
@@ -937,6 +947,7 @@ export default function Home() {
     setIsSettingsOpen(false);
     setIsYourBrainOpen(false);
     setSelectedConversationId(null);
+    setVaultConversationLiveChat(false);
     setReturnToYourBrainOnConversationClose(false);
     setIsAdvancedVoiceOpen(true);
   }, []);
@@ -995,6 +1006,7 @@ export default function Home() {
   const handleFolderSelect = useCallback((path: string | null) => {
     setSelectedFolderPath(path);
     setSelectedConversationId(null);
+    setVaultConversationLiveChat(false);
     setReturnToYourBrainOnConversationClose(false);
     setIsSettingsOpen(false);
     setIsYourBrainOpen(false);
@@ -1231,6 +1243,7 @@ export default function Home() {
 
     if (result && selectedConversationId === conversationPath.toLowerCase()) {
       setSelectedConversationId(null);
+      setVaultConversationLiveChat(false);
     }
   }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData, selectedConversationId]);
 
@@ -1243,6 +1256,7 @@ export default function Home() {
     setIsYourBrainOpen(false);
     setIsAdvancedVoiceOpen(false);
     setSelectedConversationId(conversation.id);
+    setVaultConversationLiveChat(false);
     setReturnToYourBrainOnConversationClose(Boolean(options?.fromYourBrain));
 
     const hydratedMessages = parseVaultConversationMarkdownToChatMessages(conversation.content);
@@ -1303,6 +1317,7 @@ export default function Home() {
 
   const handleCloseConversation = useCallback(() => {
     setSelectedConversationId(null);
+    setVaultConversationLiveChat(false);
     setChatMessages([]);
     setChatError(null);
     setChatLoading(false);
@@ -1398,6 +1413,9 @@ export default function Home() {
 
   const handleSendToBrain = useCallback(async (payload: { content: string; model: string; apiKey: string }) => {
     setIsChatOpen(true);
+    if (selectedConversationId) {
+      setVaultConversationLiveChat(true);
+    }
     const targetFolderPathForConversation = normalizeFolderPath(chatSessionFolderPath ?? selectedFolderPath);
     let sessionId: string;
     let startedAt: number;
@@ -1601,6 +1619,7 @@ export default function Home() {
     chatSessionStartedAt,
     createMessageId,
     persistChatConversation,
+    selectedConversationId,
     selectedFolderPath,
     userAssistantDisplayName,
     userPersonalityProfile,
@@ -1612,6 +1631,7 @@ export default function Home() {
     setIsYourBrainOpen(false);
     setIsAdvancedVoiceOpen(false);
     setSelectedConversationId(null);
+    setVaultConversationLiveChat(false);
     setReturnToYourBrainOnConversationClose(false);
     setChatMessages([]);
     setChatError(null);

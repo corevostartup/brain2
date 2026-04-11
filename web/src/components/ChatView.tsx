@@ -25,7 +25,6 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
   const endRef = useRef<HTMLDivElement>(null);
   const followBottomRef = useRef(true);
   const lastMessageKeyRef = useRef<string>("");
-  const initializedRef = useRef(false);
   const rafRef = useRef<number>(0);
   const copyTimeoutRef = useRef<number | null>(null);
   const [completedTypingIds, setCompletedTypingIds] = useState<Set<string>>(new Set());
@@ -84,11 +83,6 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
   };
 
   useEffect(() => {
-    if (!initializedRef.current) {
-      initializedRef.current = true;
-      return;
-    }
-
     if (messages.length === 0) {
       return;
     }
