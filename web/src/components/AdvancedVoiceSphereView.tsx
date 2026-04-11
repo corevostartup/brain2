@@ -6,6 +6,7 @@ import { X, Mic, MicOff } from "lucide-react";
 import * as THREE from "three";
 import BrainGraphView from "@/components/BrainGraphView";
 import { getSpeechRecognitionConstructor, startLiveTranscription } from "@/lib/browserSpeechRecognition";
+import { computeVoiceGraphCorrelation } from "@/lib/voiceTranscriptGraphCorrelation";
 import type { VaultGraph } from "@/lib/vault";
 
 type AdvancedVoiceSphereViewProps = {
@@ -111,6 +112,12 @@ export default function AdvancedVoiceSphereView({
   const streamRef = useRef<MediaStream | null>(null);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [sttHint, setSttHint] = useState<string | null>(null);
+  const [speechPulsePhase, setSpeechPulsePhase] = useState(0);
+
+  const voiceGraphCorrelation = useMemo(
+    () => computeVoiceGraphCorrelation(vaultGraph ?? null, liveTranscript),
+    [vaultGraph, liveTranscript],
+  );
 
   useEffect(() => {
     const syncTheme = () => setThemeMode(resolveThemeMode());
@@ -253,6 +260,19 @@ export default function AdvancedVoiceSphereView({
     };
   }, [micStatus]);
 
+  useEffect(() => {
+    const hasSpeechHighlight =
+      voiceGraphCorrelation.linkKeys.size > 0 || voiceGraphCorrelation.nodeStrength.size > 0;
+    if (!hasSpeechHighlight) {
+      queueMicrotask(() => setSpeechPulsePhase(0));
+      return;
+    }
+    const id = window.setInterval(() => {
+      setSpeechPulsePhase((performance.now() / 1000) * Math.PI * 2 * 0.85);
+    }, 45);
+    return () => window.clearInterval(id);
+  }, [voiceGraphCorrelation.linkKeys.size, voiceGraphCorrelation.nodeStrength.size]);
+
   const noop = useCallback(() => {}, []);
 
   const palette = themeMode === "light" ? LIGHT_PALETTE : DARK_PALETTE;
@@ -301,6 +321,13 @@ export default function AdvancedVoiceSphereView({
           hideCloseButton
           spectatorLockZoom
           liveAudioEnergy={micLevel}
+          liveSpeechPulsePhase={speechPulsePhase}
+          liveSpeechLinkKeys={
+            voiceGraphCorrelation.linkKeys.size > 0 ? voiceGraphCorrelation.linkKeys : undefined
+          }
+          liveSpeechNodeStrength={
+            voiceGraphCorrelation.nodeStrength.size > 0 ? voiceGraphCorrelation.nodeStrength : undefined
+          }
         />
       </div>
 
