@@ -45,6 +45,12 @@ function resolveThemeMode(): ThemeMode {
   return htmlTheme === "light" || bodyTheme === "light" ? "light" : "dark";
 }
 
+/** App macOS (WKWebView) — microfone costuma vir com nível mais baixo no WebKit. */
+function isBrain2NativeShell(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.documentElement.hasAttribute("data-brain2-native");
+}
+
 function pseudoRandom(seed: number): number {
   const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
   return x - Math.floor(x);
@@ -99,7 +105,7 @@ export default function AdvancedVoiceSphereView({
   const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
   const [micLevel, setMicLevel] = useState(0);
   const [micStatus, setMicStatus] = useState<"idle" | "listening" | "denied" | "unsupported">("idle");
-  const smoothRef = useRef(0);
+  const speechEnvelopeRef = useRef(0);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -122,7 +128,7 @@ export default function AdvancedVoiceSphereView({
 
     let cancelled = false;
     let raf = 0;
-    const buf = new Uint8Array(2048);
+    const native = isBrain2NativeShell();
 
     void (async () => {
       try {
@@ -140,26 +146,53 @@ export default function AdvancedVoiceSphereView({
         const src = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 2048;
-        analyser.smoothingTimeConstant = 0.82;
+        analyser.smoothingTimeConstant = native ? 0.45 : 0.72;
         src.connect(analyser);
         setMicStatus("listening");
 
-        let frame = 0;
+        const floatBuf = new Float32Array(analyser.fftSize);
+        const freqBuf = new Uint8Array(analyser.frequencyBinCount);
+        speechEnvelopeRef.current = 0;
+
         const loop = () => {
           if (cancelled) return;
-          analyser.getByteTimeDomainData(buf);
+
+          analyser.getFloatTimeDomainData(floatBuf);
           let sum = 0;
-          for (let i = 0; i < buf.length; i += 1) {
-            const v = (buf[i]! - 128) / 128;
+          for (let i = 0; i < floatBuf.length; i += 1) {
+            const v = floatBuf[i]!;
             sum += v * v;
           }
-          const rms = Math.sqrt(sum / buf.length);
-          const instant = Math.min(1, rms * 3.2);
-          smoothRef.current = smoothRef.current * 0.91 + instant * 0.09;
-          frame += 1;
-          if (frame % 2 === 0) {
-            setMicLevel(smoothRef.current);
+          const rms = Math.sqrt(sum / floatBuf.length);
+
+          analyser.getByteFrequencyData(freqBuf);
+          const binW = ctx.sampleRate / analyser.fftSize;
+          const iLo = Math.max(2, Math.floor(100 / binW));
+          const iHi = Math.min(freqBuf.length - 1, Math.ceil(4200 / binW));
+          let bandAcc = 0;
+          const nBins = Math.max(1, iHi - iLo + 1);
+          for (let i = iLo; i <= iHi; i += 1) {
+            bandAcc += freqBuf[i]!;
           }
+          const bandNorm = bandAcc / (nBins * 255);
+
+          const rmsGain = native ? 11.2 : 5.4;
+          const rmsNorm = Math.min(1, rms * rmsGain);
+          const combined = Math.min(1, rmsNorm * 0.36 + bandNorm * 0.64);
+          const knee = native ? 3.7 : 2.55;
+          const lifted = 1 - Math.exp(-combined * knee);
+
+          let env = speechEnvelopeRef.current;
+          const attack = native ? 0.62 : 0.48;
+          const release = native ? 0.34 : 0.26;
+          if (lifted > env) {
+            env += (lifted - env) * attack;
+          } else {
+            env += (lifted - env) * release;
+          }
+          speechEnvelopeRef.current = env;
+
+          setMicLevel(env);
           raf = requestAnimationFrame(loop);
         };
         raf = requestAnimationFrame(loop);

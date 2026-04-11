@@ -1,4 +1,5 @@
 import type { ANCCProcessResult, VaultCorrelationHit } from "@/ancc/models/context";
+import type { UserPersonalityProfile } from "@/lib/userPersonalityProfile";
 import type { MemoryNote } from "@/ancc/models/memory";
 import { createEmptyMemoryNote } from "@/ancc/models/memory";
 import { interpretUserInput } from "@/ancc/agents/input-agent";
@@ -19,6 +20,11 @@ import {
   type VaultFileSnapshot,
   buildVaultIndex,
 } from "@/ancc/pipeline/vault-correlation";
+import {
+  extractExplicitCorrelationHints,
+  mergeVaultCorrelationHits,
+  resolveHintsToExplicitVaultHits,
+} from "@/ancc/pipeline/explicit-correlation-command";
 import { CORRELATION } from "@/ancc/rules/correlation.rules";
 import { newInteractionId } from "@/ancc/models/metadata";
 
@@ -55,6 +61,10 @@ export type ProcessInteractionOptions = {
    * Quando definido (ex.: `/api/ancc-retrieve` com embeddings), substitui o correlate só-lexical.
    */
   precomputedVaultHits?: VaultCorrelationHit[];
+  /** Nome que o utilizador pediu para chamar o assistente (persistido na app). */
+  userAssistantDisplayName?: string | null;
+  /** Perfil de personalidade 0–100 (persistido). */
+  userPersonalityProfile?: UserPersonalityProfile | null;
 };
 
 export function processInteraction(opts: ProcessInteractionOptions): ANCCProcessResult {
@@ -83,6 +93,13 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
       tagQueryHint: topicSource,
     });
   }
+
+  const explicitHints = extractExplicitCorrelationHints(opts.userMessage);
+  if (explicitHints.length > 0) {
+    const explicitHits = resolveHintsToExplicitVaultHits(explicitHints, opts.vaultFiles);
+    vaultHits = mergeVaultCorrelationHits(vaultHits, explicitHits);
+  }
+
   vaultHits = applyVaultPathAffinityToHits(vaultHits, opts.plasticityState.vaultPathAffinity);
   const { forContext: vaultForContext, forPersistence: vaultPersisted } = splitVaultHitsByPersistence(vaultHits);
   const index = buildVaultIndex(opts.vaultFiles);
@@ -148,6 +165,8 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
     vaultCorrelations: vaultForContext,
     vaultCorrelationsPersisted: vaultPersisted,
     recentBullets,
+    userAssistantDisplayName: opts.userAssistantDisplayName ?? null,
+    userPersonalityProfile: opts.userPersonalityProfile ?? null,
   });
 
   const hiddenSystemBlock = buildHiddenSystemPromptBlock(assembled);

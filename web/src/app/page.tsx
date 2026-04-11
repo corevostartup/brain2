@@ -67,10 +67,29 @@ import {
   type VaultCorrelationHit,
 } from "@/ancc";
 import { buildBrain2BaseSystemPrompt } from "@/lib/brain2SystemPrompt";
+import {
+  buildUserAssistantIdentitySystemAddition,
+  loadUserAssistantDisplayName,
+  saveUserAssistantDisplayName,
+  tryParseAssistantRenameFromUserMessage,
+} from "@/lib/userAssistantIdentity";
+import {
+  applyPersonalityUpdatesFromUserMessage,
+  buildUserPersonalitySystemAddition,
+  loadUserPersonalityProfile,
+  saveUserPersonalityProfile,
+  type UserPersonalityProfile,
+} from "@/lib/userPersonalityProfile";
 import { buildVaultSnapshotsForAncc } from "@/lib/anccVaultSnapshots";
 import { buildAnccRecentBullets } from "@/lib/anccRecentContext";
 import { appendRollingSessionSummary } from "@/lib/anccRollingSummary";
-import { buildVaultConversationMarkdown } from "@/lib/vaultConversationMarkdown";
+import {
+  buildVaultConversationMarkdown,
+  extractFolderPathFromVaultPath,
+  parseVaultConversationMarkdownToChatMessages,
+  tryParseConversationRecordPartsFromVaultPath,
+  tryParseCreatedAtFromVaultContent,
+} from "@/lib/vaultConversationMarkdown";
 
 type PresetVaultResponse = {
   path: string;
@@ -384,6 +403,10 @@ export default function Home() {
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const [chatSessionStartedAt, setChatSessionStartedAt] = useState<number | null>(null);
   const [chatSessionFolderPath, setChatSessionFolderPath] = useState<string | null>(null);
+  /** Nome que o utilizador deu ao assistente (localStorage + regra persistente). */
+  const [userAssistantDisplayName, setUserAssistantDisplayName] = useState<string | null>(null);
+  /** Traços de personalidade 0–100 (persistido). */
+  const [userPersonalityProfile, setUserPersonalityProfile] = useState<UserPersonalityProfile>({ traits: {} });
   const [isChatOpen, setIsChatOpen] = useState(false);
   /** Estado ANCC (plasticidade + recorrência) por sessão de chat no browser. */
   const anccSessionRef = useRef(createDefaultANCCSession());
@@ -404,6 +427,11 @@ export default function Home() {
 
   useEffect(() => {
     setWebDirectoryOnboardingDone(readWebDirectoryOnboardingCompleted());
+  }, []);
+
+  useEffect(() => {
+    setUserAssistantDisplayName(loadUserAssistantDisplayName());
+    setUserPersonalityProfile(loadUserPersonalityProfile());
   }, []);
 
   useEffect(() => {
@@ -1216,6 +1244,28 @@ export default function Home() {
     setIsAdvancedVoiceOpen(false);
     setSelectedConversationId(conversation.id);
     setReturnToYourBrainOnConversationClose(Boolean(options?.fromYourBrain));
+
+    const hydratedMessages = parseVaultConversationMarkdownToChatMessages(conversation.content);
+    setChatMessages(hydratedMessages);
+    setChatError(null);
+    setChatLoading(false);
+
+    const metaFromPath = tryParseConversationRecordPartsFromVaultPath(conversation.path);
+    const createdFromBody = tryParseCreatedAtFromVaultContent(conversation.content);
+    if (metaFromPath) {
+      setChatSessionId(metaFromPath.sessionId);
+      setChatSessionStartedAt(metaFromPath.startedAt);
+    } else {
+      setChatSessionId(null);
+      setChatSessionStartedAt(createdFromBody);
+    }
+
+    const folderFromPath = extractFolderPathFromVaultPath(conversation.path);
+    setChatSessionFolderPath(normalizeFolderPath(folderFromPath));
+
+    newChatSessionLockRef.current = null;
+    anccSessionRef.current = createDefaultANCCSession();
+    anccRollingSummaryRef.current = "";
   }, []);
 
   const handleOpenConversationFromNode = useCallback((nodeId: string, nodeLabel: string) => {
@@ -1253,6 +1303,15 @@ export default function Home() {
 
   const handleCloseConversation = useCallback(() => {
     setSelectedConversationId(null);
+    setChatMessages([]);
+    setChatError(null);
+    setChatLoading(false);
+    setChatSessionId(null);
+    setChatSessionStartedAt(null);
+    setChatSessionFolderPath(null);
+    newChatSessionLockRef.current = null;
+    anccSessionRef.current = createDefaultANCCSession();
+    anccRollingSummaryRef.current = "";
     if (returnToYourBrainOnConversationClose) {
       setIsYourBrainOpen(true);
     }
@@ -1369,14 +1428,31 @@ export default function Home() {
       createdAt: Date.now(),
     };
 
+    let displayNameForTurn = userAssistantDisplayName;
+    const parsedAssistantName = tryParseAssistantRenameFromUserMessage(payload.content);
+    if (parsedAssistantName) {
+      saveUserAssistantDisplayName(parsedAssistantName);
+      displayNameForTurn = parsedAssistantName;
+      setUserAssistantDisplayName(parsedAssistantName);
+    }
+
+    let personalityForTurn = userPersonalityProfile;
+    const { next: nextPersonality, changed: personalityChanged } = applyPersonalityUpdatesFromUserMessage(
+      payload.content,
+      userPersonalityProfile,
+    );
+    if (personalityChanged) {
+      saveUserPersonalityProfile(nextPersonality);
+      personalityForTurn = nextPersonality;
+      setUserPersonalityProfile(nextPersonality);
+    }
+
     const requestMessages: ChatMessage[] = [...chatMessages, userMessage];
     setChatMessages(requestMessages);
 
     setChatError(null);
     setIsSettingsOpen(false);
     setIsYourBrainOpen(false);
-    setSelectedConversationId(null);
-    setReturnToYourBrainOnConversationClose(false);
     setChatLoading(true);
 
     let anccForPersist: ANCCProcessResult | null = null;
@@ -1418,10 +1494,21 @@ export default function Home() {
         recentBullets: buildAnccRecentBullets(requestMessages),
         sessionSummary: anccRollingSummaryRef.current.trim() || undefined,
         precomputedVaultHits,
+        userAssistantDisplayName: displayNameForTurn,
+        userPersonalityProfile: personalityForTurn,
       });
       anccForPersist = anccResult;
 
-      const systemContent = `${buildBrain2BaseSystemPrompt()}\n\n${anccResult.hiddenSystemBlock}`;
+      const identityAddition = buildUserAssistantIdentitySystemAddition(displayNameForTurn);
+      const personalityAddition = buildUserPersonalitySystemAddition(personalityForTurn);
+      const systemContent = [
+        buildBrain2BaseSystemPrompt(),
+        identityAddition,
+        personalityAddition,
+        anccResult.hiddenSystemBlock,
+      ]
+        .filter((block) => block.trim().length > 0)
+        .join("\n\n");
       const priorForApi = chatMessages.filter((m) => m.role !== "system");
       const apiMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
         { role: "system", content: systemContent },
@@ -1515,6 +1602,8 @@ export default function Home() {
     createMessageId,
     persistChatConversation,
     selectedFolderPath,
+    userAssistantDisplayName,
+    userPersonalityProfile,
     vaultConversations,
   ]);
 
@@ -1677,6 +1766,7 @@ export default function Home() {
           onNewConversation={handleNewConversation}
           onYourBrain={handleOpenBrain}
           onLogout={handleLogout}
+          assistantDisplayName={userAssistantDisplayName}
           userName={authUser?.displayName || authUser?.email}
           userPhotoURL={authUser?.photoURL}
           onSettings={() => {
@@ -1712,6 +1802,7 @@ export default function Home() {
             handleOpenBrain();
           }}
           onLogout={handleLogout}
+          assistantDisplayName={userAssistantDisplayName}
           userName={authUser?.displayName || authUser?.email}
           userPhotoURL={authUser?.photoURL}
           onSettings={() => {

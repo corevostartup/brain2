@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
+import { flushSync } from "react-dom";
 import {
   Plus,
   Mic,
@@ -160,7 +161,8 @@ export default function InputBar({
 
   const handleSubmit = async () => {
     if (isSending) return;
-    if (!value.trim()) return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
 
     if (!llmModel.trim() || !llmApiKey.trim()) {
       setLlmStatus("error");
@@ -168,17 +170,21 @@ export default function InputBar({
       return;
     }
 
+    const model = llmModel.trim();
+    const apiKey = llmApiKey.trim();
+
+    // Limpar já no Enter/clique — não esperar pelo `await` do envio (evita texto “preso” na caixa).
+    flushSync(() => {
+      setValue("");
+    });
+    autoResize();
+
     if (onSend) {
       await onSend({
-        content: value.trim(),
-        model: llmModel.trim(),
-        apiKey: llmApiKey.trim(),
+        content: trimmed,
+        model,
+        apiKey,
       });
-    }
-
-    setValue("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
     }
   };
 

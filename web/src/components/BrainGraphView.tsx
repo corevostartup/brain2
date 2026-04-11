@@ -64,10 +64,18 @@ const PHYSICS = {
   spectatorCooldownMs: 120000,
   /** Máx. ~32% de “respiração” na repulsão com o áudio (antes 82% era brusco). */
   spectatorChargeAudioMul: 0.32,
+  /** macOS / WKWebView: entrada costuma ser mais baixa — espelhar melhor a fala. */
+  spectatorChargeAudioMulNative: 0.62,
   /** Suavização da energia de áudio (~420 ms para ~63% do alvo). */
   spectatorEnergyTauSec: 0.42,
+  spectatorEnergyTauNativeSec: 0.13,
   /** Evita reheat a 60 Hz — só reaquece a simulação ocasionalmente. */
   spectatorReheatMinMs: 380,
+  spectatorReheatMinMsNative: 260,
+  spectatorParticleSpeedBase: 0.0026,
+  spectatorParticleSpeedMul: 0.011,
+  spectatorParticleSpeedBaseNative: 0.0032,
+  spectatorParticleSpeedMulNative: 0.02,
 };
 
 const GROUP_COLORS: Record<string, string> = {
@@ -500,29 +508,32 @@ export default function BrainGraphView({
 
       const target = liveAudioEnergyRef.current;
       let s = spectatorSmoothEnergyRef.current;
-      const tau = PHYSICS.spectatorEnergyTauSec;
+      const tau = isNativeShell ? PHYSICS.spectatorEnergyTauNativeSec : PHYSICS.spectatorEnergyTauSec;
       s += (target - s) * Math.min(1, dt / tau);
       spectatorSmoothEnergyRef.current = s;
       const e = s;
 
       if (fg) {
         const baseCharge = isNativeShell && useVault ? PHYSICS.nativeChargeStrength : PHYSICS.chargeStrength;
+        const chargeMul = isNativeShell ? PHYSICS.spectatorChargeAudioMulNative : PHYSICS.spectatorChargeAudioMul;
         const charge = fg.d3Force("charge") as unknown as { strength?: (v: number) => void };
-        charge?.strength?.(baseCharge * (1 + e * PHYSICS.spectatorChargeAudioMul));
+        charge?.strength?.(baseCharge * (1 + e * chargeMul));
 
         const baseCenter =
           isNativeShell && useVault ? PHYSICS.nativeCenterStrength : PHYSICS.centerStrength;
         const basePull =
           isNativeShell && useVault ? PHYSICS.nativePullToOriginStrength : PHYSICS.pullToOriginStrength;
-        const cStr =
-          baseCenter * PHYSICS.spectatorCenterStrengthMul * (0.97 + e * 0.03);
-        const pullStr = basePull * PHYSICS.spectatorPullToOriginMul * (0.985 + e * 0.015);
+        const centerFactor = isNativeShell ? 0.94 + e * 0.06 : 0.97 + e * 0.03;
+        const pullFactor = isNativeShell ? 0.965 + e * 0.035 : 0.985 + e * 0.015;
+        const centerStr = baseCenter * PHYSICS.spectatorCenterStrengthMul * centerFactor;
+        const pullStr = basePull * PHYSICS.spectatorPullToOriginMul * pullFactor;
 
-        fg.d3Force("center", forceCenter(0, 0, 0).strength(cStr));
+        fg.d3Force("center", forceCenter(0, 0, 0).strength(centerStr));
         fg.d3Force("x", forceX(0).strength(pullStr));
         fg.d3Force("y", forceY(0).strength(pullStr));
 
-        if (now - spectatorLastReheatMsRef.current >= PHYSICS.spectatorReheatMinMs) {
+        const reheatMs = isNativeShell ? PHYSICS.spectatorReheatMinMsNative : PHYSICS.spectatorReheatMinMs;
+        if (now - spectatorLastReheatMsRef.current >= reheatMs) {
           fg.d3ReheatSimulation();
           spectatorLastReheatMsRef.current = now;
         }
@@ -771,6 +782,11 @@ export default function BrainGraphView({
       ) {
         return "rgba(255,255,255,0.038)";
       }
+      if (variant === "spectator" && (!liveSpeechLinkKeys || liveSpeechLinkKeys.size === 0)) {
+        const e = Math.min(1, Math.max(0, liveAudioEnergy ?? 0));
+        const alpha = 0.1 + e * (isNativeShell ? 0.32 : 0.24);
+        return `rgba(255,255,255,${alpha})`;
+      }
 
       if (focusRootId && dragEgoSet) {
         const bothInEgo = dragEgoSet.has(a) && dragEgoSet.has(b);
@@ -794,6 +810,7 @@ export default function BrainGraphView({
       liveSpeechLinkKeys,
       liveSpeechNodeStrength,
       liveSpeechPulsePhase,
+      liveAudioEnergy,
     ]
   );
 
@@ -809,6 +826,10 @@ export default function BrainGraphView({
       ) {
         const pulse = 0.62 + 0.38 * Math.sin(liveSpeechPulsePhase * 1.05);
         return 0.95 + pulse * 1.35;
+      }
+      if (variant === "spectator" && (!liveSpeechLinkKeys || liveSpeechLinkKeys.size === 0)) {
+        const e = Math.min(1, Math.max(0, liveAudioEnergy ?? 0));
+        return 0.48 + e * (isNativeShell ? 1.35 : 1.05);
       }
       if (focusRootId && dragEgoSet) {
         const bothInEgo = dragEgoSet.has(a) && dragEgoSet.has(b);
@@ -829,17 +850,19 @@ export default function BrainGraphView({
       variant,
       liveSpeechLinkKeys,
       liveSpeechPulsePhase,
+      liveAudioEnergy,
     ]
   );
 
   const linkDirectionalParticles = useCallback(
     (link: LinkObject<BrainNode, BrainLink>) => {
-      if (variant !== "spectator" || !liveSpeechLinkKeys?.size) {
-        return 0;
+      if (variant !== "spectator") return 0;
+      if (liveSpeechLinkKeys?.size) {
+        const a = nodeIdOf(link.source);
+        const b = nodeIdOf(link.target);
+        return liveSpeechLinkKeys.has(linkKey(a, b)) ? 6 : 0;
       }
-      const a = nodeIdOf(link.source);
-      const b = nodeIdOf(link.target);
-      return liveSpeechLinkKeys.has(linkKey(a, b)) ? 6 : 0;
+      return 1;
     },
     [variant, liveSpeechLinkKeys]
   );
@@ -1018,7 +1041,20 @@ export default function BrainGraphView({
               linkColor={linkColor}
               linkWidth={linkWidth}
               linkDirectionalParticles={variant === "spectator" ? linkDirectionalParticles : 0}
-              linkDirectionalParticleSpeed={variant === "spectator" ? 0.0035 : 0}
+              linkDirectionalParticleSpeed={
+                variant === "spectator"
+                  ? () => {
+                      const e = Math.min(1, Math.max(0, liveAudioEnergy ?? 0));
+                      const base = isNativeShell
+                        ? PHYSICS.spectatorParticleSpeedBaseNative
+                        : PHYSICS.spectatorParticleSpeedBase;
+                      const mul = isNativeShell
+                        ? PHYSICS.spectatorParticleSpeedMulNative
+                        : PHYSICS.spectatorParticleSpeedMul;
+                      return base + e * mul;
+                    }
+                  : 0
+              }
               linkDirectionalParticleWidth={variant === "spectator" ? 1.35 : 0}
               d3VelocityDecay={
                 variant === "spectator"

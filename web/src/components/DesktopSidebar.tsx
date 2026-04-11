@@ -138,6 +138,8 @@ type DesktopSidebarProps = {
   onRenameFolder?: (folderPath: string, nextName: string) => void | Promise<void>;
   onRenameConversation?: (conversationPath: string, nextTitle: string) => void | Promise<void>;
   onDeleteConversation?: (conversationPath: string, conversationTitle: string) => void | Promise<void>;
+  /** Nome dado pelo utilizador ao assistente — sussurro discreto junto ao título Brain2. */
+  assistantDisplayName?: string | null;
 };
 
 export default function DesktopSidebar({
@@ -161,7 +163,9 @@ export default function DesktopSidebar({
   onRenameFolder,
   onRenameConversation,
   onDeleteConversation,
+  assistantDisplayName = null,
 }: DesktopSidebarProps) {
+  const assistantEcho = assistantDisplayName?.trim() ?? "";
   const normalizedUserName = userName?.trim() || "Usuário";
   const userInitial = normalizedUserName.charAt(0).toUpperCase();
   const normalizedUserPhotoURL = userPhotoURL?.trim() || "";
@@ -676,7 +680,18 @@ export default function DesktopSidebar({
     >
       <div className="sidebar-card">
         <div className="brand-row">
-          <h2>Brain2</h2>
+          <div className="brand-title-cluster">
+            <h2>Brain2</h2>
+            {assistantEcho ? (
+              <span
+                className="brand-assistant-echo"
+                title={`Assistente: ${assistantEcho}`}
+                aria-hidden="true"
+              >
+                {assistantEcho}
+              </span>
+            ) : null}
+          </div>
           <div className="brand-actions">
             <button className="icon-btn" aria-label="Ocultar barra lateral" onClick={onHide}>
               <PanelLeftClose size={14} strokeWidth={2} />
@@ -699,6 +714,82 @@ export default function DesktopSidebar({
         <button className="your-brain-btn" type="button" aria-label="Your Brain" onClick={onYourBrain}>
           Your Brain
         </button>
+
+        <div className="sidebar-main-split">
+        <section className="section-block conversations-section" aria-label="Todas as conversas">
+          <p className="section-title">Todas as conversas</p>
+          <p className="section-subtitle">
+            {vaultLoading
+              ? "Carregando conversas..."
+              : selectedFolderPath
+              ? `${filteredConversations.length} arquivos .md em ${selectedFolderPath}`
+              : `${filteredConversations.length} arquivos .md no vault`}
+          </p>
+          <ul className="item-list conversation-list">
+            {vaultLoading && filteredConversations.length === 0
+              ? (
+                <li className="vault-loading-row" aria-live="polite" aria-busy="true">
+                  <span className="vault-loading-indicator">
+                    <LoaderCircle className="vault-loading-spinner" size={13} strokeWidth={1.8} />
+                    <span>Carregando conversas...</span>
+                  </span>
+                </li>
+                )
+              : filteredConversations.length > 0
+              ? filteredConversations.map((conversation) => (
+              <li key={conversation.id}>
+                {renameConversationPath === conversation.path ? (
+                  <div
+                    className="list-item conversation-item conversation-item--editing"
+                    title={conversation.path}
+                  >
+                    <MessageSquare size={13} strokeWidth={1.8} />
+                    <input
+                      ref={renameConversationInputRef}
+                      className="rename-conversation-input"
+                      type="text"
+                      value={renameConversationName}
+                      onChange={(event) => setRenameConversationName(event.target.value)}
+                      onKeyDown={handleRenameConversationKeyDown}
+                      onBlur={() => {
+                        if (renameConversationSubmitting) {
+                          return;
+                        }
+                        const trimmed = renameConversationName.trim();
+                        if (!trimmed || trimmed === renameConversationOriginalTitle) {
+                          closeRenameConversationInput();
+                          return;
+                        }
+                        void submitRenameConversation();
+                      }}
+                      spellCheck={false}
+                      aria-label="Renomear conversa"
+                      disabled={renameConversationSubmitting}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    className={`list-item conversation-item${selectedConversationId === conversation.id ? " conversation-item--active" : ""}`}
+                    type="button"
+                    title={conversation.path}
+                    onClick={() => onConversationSelect?.(conversation)}
+                    onContextMenu={(event) => handleConversationContextMenu(event, conversation)}
+                    aria-pressed={selectedConversationId === conversation.id}
+                  >
+                    <MessageSquare size={13} strokeWidth={1.8} />
+                    <span>{formatConversationDisplayTitle(conversation.title) || conversation.title}</span>
+                    <small className="conversation-meta">{formatModifiedDate(conversation.modifiedAt)}</small>
+                  </button>
+                )}
+              </li>
+              ))
+              : (
+                <li>
+                  <span className="vault-empty-hint">Nenhum arquivo .md encontrado para esta pasta.</span>
+                </li>
+              )}
+          </ul>
+        </section>
 
         <section className="section-block folders-section" aria-label="Pastas">
           <div className="section-header-row">
@@ -875,81 +966,7 @@ export default function DesktopSidebar({
               )}
           </ul>
         </section>
-
-        <section className="section-block conversations-section" aria-label="Todas as conversas">
-          <p className="section-title">Todas as conversas</p>
-          <p className="section-subtitle">
-            {vaultLoading
-              ? "Carregando conversas..."
-              : selectedFolderPath
-              ? `${filteredConversations.length} arquivos .md em ${selectedFolderPath}`
-              : `${filteredConversations.length} arquivos .md no vault`}
-          </p>
-          <ul className="item-list conversation-list">
-            {vaultLoading && filteredConversations.length === 0
-              ? (
-                <li className="vault-loading-row" aria-live="polite" aria-busy="true">
-                  <span className="vault-loading-indicator">
-                    <LoaderCircle className="vault-loading-spinner" size={13} strokeWidth={1.8} />
-                    <span>Carregando conversas...</span>
-                  </span>
-                </li>
-                )
-              : filteredConversations.length > 0
-              ? filteredConversations.map((conversation) => (
-              <li key={conversation.id}>
-                {renameConversationPath === conversation.path ? (
-                  <div
-                    className="list-item conversation-item conversation-item--editing"
-                    title={conversation.path}
-                  >
-                    <MessageSquare size={13} strokeWidth={1.8} />
-                    <input
-                      ref={renameConversationInputRef}
-                      className="rename-conversation-input"
-                      type="text"
-                      value={renameConversationName}
-                      onChange={(event) => setRenameConversationName(event.target.value)}
-                      onKeyDown={handleRenameConversationKeyDown}
-                      onBlur={() => {
-                        if (renameConversationSubmitting) {
-                          return;
-                        }
-                        const trimmed = renameConversationName.trim();
-                        if (!trimmed || trimmed === renameConversationOriginalTitle) {
-                          closeRenameConversationInput();
-                          return;
-                        }
-                        void submitRenameConversation();
-                      }}
-                      spellCheck={false}
-                      aria-label="Renomear conversa"
-                      disabled={renameConversationSubmitting}
-                    />
-                  </div>
-                ) : (
-                  <button
-                    className={`list-item conversation-item${selectedConversationId === conversation.id ? " conversation-item--active" : ""}`}
-                    type="button"
-                    title={conversation.path}
-                    onClick={() => onConversationSelect?.(conversation)}
-                    onContextMenu={(event) => handleConversationContextMenu(event, conversation)}
-                    aria-pressed={selectedConversationId === conversation.id}
-                  >
-                    <MessageSquare size={13} strokeWidth={1.8} />
-                    <span>{formatConversationDisplayTitle(conversation.title) || conversation.title}</span>
-                    <small className="conversation-meta">{formatModifiedDate(conversation.modifiedAt)}</small>
-                  </button>
-                )}
-              </li>
-            ))
-              : (
-                <li>
-                  <span className="vault-empty-hint">Nenhum arquivo .md encontrado para esta pasta.</span>
-                </li>
-              )}
-          </ul>
-        </section>
+        </div>
 
         <div className="promo-card" role="note" aria-label="Upgrade para plano pro">
           <div className="promo-title-row">
@@ -1167,20 +1184,28 @@ export default function DesktopSidebar({
             border-radius: 0;
             border: none;
             height: 100dvh;
-            padding: 14px 12px 16px;
+            padding: 12px 12px 14px;
           }
         }
 
         .sidebar-card {
           display: flex;
           flex-direction: column;
-          gap: 14px;
+          gap: 10px;
           height: 100%;
           min-height: 0;
           background: var(--bar-bg);
           border: 1px solid var(--bar-border);
           border-radius: 18px;
-          padding: 12px;
+          padding: 10px 12px 12px;
+        }
+
+        .sidebar-main-split {
+          display: flex;
+          flex-direction: column;
+          flex: 1;
+          min-height: 0;
+          gap: 8px;
         }
 
         .brand-row {
@@ -1188,12 +1213,23 @@ export default function DesktopSidebar({
           align-items: center;
           justify-content: space-between;
           flex-shrink: 0;
+          gap: 8px;
+        }
+
+        .brand-title-cluster {
+          display: flex;
+          flex-direction: row;
+          align-items: baseline;
+          gap: 7px;
+          min-width: 0;
+          flex: 1;
         }
 
         .brand-actions {
           display: flex;
           align-items: center;
           gap: 4px;
+          flex-shrink: 0;
         }
 
         .brand-row h2 {
@@ -1204,6 +1240,22 @@ export default function DesktopSidebar({
           text-transform: uppercase;
           color: var(--foreground);
           font-weight: 500;
+          flex-shrink: 0;
+        }
+
+        .brand-assistant-echo {
+          font-family: 'Inter', system-ui, sans-serif;
+          font-size: 8.5px;
+          font-weight: 200;
+          letter-spacing: 0.07em;
+          line-height: 1;
+          color: var(--muted);
+          opacity: 0.42;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: min(118px, 38vw);
+          transform: translateY(0.5px);
         }
 
         .icon-btn {
@@ -1227,7 +1279,7 @@ export default function DesktopSidebar({
         .search-stack {
           display: flex;
           flex-direction: column;
-          gap: 8px;
+          gap: 6px;
           flex-shrink: 0;
         }
 
@@ -1300,7 +1352,9 @@ export default function DesktopSidebar({
         }
 
         .folders-section {
-          flex: 1;
+          flex: 1 1 0;
+          min-height: 0;
+          max-height: clamp(150px, 30vh, 240px);
           overflow: hidden;
         }
 
@@ -1487,13 +1541,25 @@ export default function DesktopSidebar({
         }
 
         .conversations-section {
-          min-height: 160px;
+          flex: 1 1 0;
+          min-height: 0;
           overflow: hidden;
+          display: flex;
+          flex-direction: column;
+        }
+
+        .conversations-section .section-title {
+          flex-shrink: 0;
+        }
+
+        .conversations-section .section-subtitle {
+          flex-shrink: 0;
         }
 
         .conversation-list {
+          flex: 1 1 auto;
+          min-height: 0;
           overflow-y: auto;
-          max-height: 180px;
         }
 
         .conversation-item {

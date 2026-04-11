@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Volume2, X } from "lucide-react";
 import { formatConversationDisplayTitle, type VaultConversation } from "@/lib/vault";
+import { parseVaultConversationMarkdownToChatMessages } from "@/lib/vaultConversationMarkdown";
 
 type ConversationMessage = {
   id: string;
@@ -15,135 +16,6 @@ type ConversationViewProps = {
   onClose: () => void;
 };
 
-function roleFromLabel(label: string): "user" | "assistant" {
-  const normalized = label.trim().toLowerCase();
-  if (["user", "utilizador", "usuario", "usuário", "you", "voce", "você"].includes(normalized)) {
-    return "user";
-  }
-  return "assistant";
-}
-
-function stripLeadingFrontmatter(content: string): string {
-  const lines = content.replace(/\r\n/g, "\n").split("\n");
-  if (lines.length === 0 || lines[0].trim() !== "---") {
-    return content;
-  }
-
-  for (let index = 1; index < lines.length; index += 1) {
-    if (lines[index].trim() === "---") {
-      return lines.slice(index + 1).join("\n");
-    }
-  }
-
-  return content;
-}
-
-function parseRoleMarker(line: string): {
-  role: "user" | "assistant";
-  inlineText: string;
-} | null {
-  const timestampHeadingMatch = line.match(
-    /^\s*#{1,6}\s*(user|utilizador|usuario|usuário|you|voce|você|assistant|chatgpt|ai|brain2|brain)\b\s*[—–-]\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/i
-  );
-
-  if (timestampHeadingMatch) {
-    return {
-      role: roleFromLabel(timestampHeadingMatch[1]),
-      inlineText: "",
-    };
-  }
-
-  const markerMatch = line.match(
-    /^\s*(#{1,6}\s*)?(user|utilizador|usuario|usuário|you|voce|você|assistant|chatgpt|ai|brain2|brain)\b(?:\s*([:\-–—])\s*(.*))?\s*$/i
-  );
-
-  if (!markerMatch) {
-    return null;
-  }
-
-  const hasHeadingPrefix = Boolean(markerMatch[1]);
-  const role = roleFromLabel(markerMatch[2]);
-  const separator = markerMatch[3] ?? "";
-  const tail = (markerMatch[4] ?? "").trim();
-
-  const inlineText = (!hasHeadingPrefix && separator === ":" && tail.length > 0) ? tail : "";
-
-  return { role, inlineText };
-}
-
-function parseConversationMarkdown(content: string): ConversationMessage[] {
-  const sanitizedContent = stripLeadingFrontmatter(content);
-  const lines = sanitizedContent.replace(/\r\n/g, "\n").split("\n");
-  const messages: ConversationMessage[] = [];
-  let currentRole: "user" | "assistant" = "assistant";
-  let buffer: string[] = [];
-
-  const flush = () => {
-    const text = buffer.join("\n").trim();
-    if (text.length > 0) {
-      messages.push({
-        id: `${messages.length + 1}`,
-        role: currentRole,
-        content: text,
-      });
-    }
-    buffer = [];
-  };
-
-  const firstRoleLine = lines.findIndex((line) => parseRoleMarker(line) !== null);
-
-  if (firstRoleLine === -1) {
-    const fallback = sanitizedContent.trim();
-    if (fallback.length > 0) {
-      return [
-        {
-          id: "fallback-1",
-          role: "assistant",
-          content: fallback,
-        },
-      ];
-    }
-
-    return [
-      {
-        id: "fallback-1",
-        role: "assistant",
-        content: "Sem conteúdo nesta conversa.",
-      },
-    ];
-  }
-
-  for (let index = firstRoleLine; index < lines.length; index += 1) {
-    const line = lines[index];
-    const marker = parseRoleMarker(line);
-
-    if (marker) {
-      flush();
-      currentRole = marker.role;
-      if (marker.inlineText.length > 0) {
-        buffer.push(marker.inlineText);
-      }
-      continue;
-    }
-
-    buffer.push(line);
-  }
-
-  flush();
-
-  if (messages.length === 0) {
-    return [
-      {
-        id: "fallback-1",
-        role: "assistant",
-        content: "Sem conteúdo nesta conversa.",
-      },
-    ];
-  }
-
-  return messages;
-}
-
 function formatModifiedDate(timestamp: number): string {
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",
@@ -155,10 +27,13 @@ function formatModifiedDate(timestamp: number): string {
 }
 
 export default function ConversationView({ conversation, onClose }: ConversationViewProps) {
-  const messages = useMemo(
-    () => parseConversationMarkdown(conversation.content),
-    [conversation.content]
-  );
+  const messages = useMemo((): ConversationMessage[] => {
+    return parseVaultConversationMarkdownToChatMessages(conversation.content).map((message) => ({
+      id: message.id,
+      role: message.role === "user" ? "user" : "assistant",
+      content: message.content,
+    }));
+  }, [conversation.content]);
   const displayTitle = useMemo(
     () => formatConversationDisplayTitle(conversation.title) || "Conversa",
     [conversation.title]

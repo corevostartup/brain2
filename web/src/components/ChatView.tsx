@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type UIEvent, type WheelEvent } from "react";
 import { Check, Copy, Volume2 } from "lucide-react";
 import type { ChatMessage } from "@/lib/chat";
 
@@ -17,8 +17,14 @@ function roleLabel(role: ChatMessage["role"]): string {
   return "Sistema";
 }
 
+/** Pixels from the bottom to consider the user “following” the stream (auto-scroll). */
+const PIN_THRESHOLD_PX = 96;
+
 export default function ChatView({ title, messages, loading, error }: ChatViewProps) {
+  const scrollRootRef = useRef<HTMLElement | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const followBottomRef = useRef(true);
+  const lastMessageKeyRef = useRef<string>("");
   const initializedRef = useRef(false);
   const rafRef = useRef<number>(0);
   const copyTimeoutRef = useRef<number | null>(null);
@@ -34,6 +40,29 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
       }
     };
   }, []);
+
+  const updateFollowFromScrollPosition = useCallback(() => {
+    const root = scrollRootRef.current;
+    if (!root) return;
+    const gap = root.scrollHeight - root.scrollTop - root.clientHeight;
+    followBottomRef.current = gap <= PIN_THRESHOLD_PX;
+  }, []);
+
+  const onScrollRoot = useCallback(
+    (_e: UIEvent<HTMLElement>) => {
+      updateFollowFromScrollPosition();
+    },
+    [updateFollowFromScrollPosition]
+  );
+
+  const onWheelRoot = useCallback(
+    (e: WheelEvent<HTMLElement>) => {
+      if (e.deltaY < -1) {
+        followBottomRef.current = false;
+      }
+    },
+    []
+  );
 
   const copyMessage = async (messageId: string, content: string) => {
     if (!content) {
@@ -132,6 +161,23 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
     };
   }, [messages, completedTypingIds]);
 
+  /** Novo envio do utilizador: voltar a seguir o fundo para a resposta animada. */
+  useEffect(() => {
+    if (messages.length === 0) {
+      lastMessageKeyRef.current = "";
+      return;
+    }
+    const last = messages[messages.length - 1];
+    const key = `${last.id}:${last.role}`;
+    if (key === lastMessageKeyRef.current) {
+      return;
+    }
+    lastMessageKeyRef.current = key;
+    if (last.role === "user") {
+      followBottomRef.current = true;
+    }
+  }, [messages]);
+
   const pendingTypingId = (() => {
     const last = messages[messages.length - 1];
     if (!last) return null;
@@ -141,7 +187,22 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
   })();
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (!followBottomRef.current) {
+      return;
+    }
+    const root = scrollRootRef.current;
+    if (!root) {
+      return;
+    }
+    const run = () => {
+      if (!followBottomRef.current) {
+        return;
+      }
+      root.scrollTop = root.scrollHeight - root.clientHeight;
+    };
+    run();
+    const id = requestAnimationFrame(run);
+    return () => cancelAnimationFrame(id);
   }, [messages, loading, typingText]);
 
   return (
@@ -153,7 +214,13 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
         </div>
       </header>
 
-      <section className="chat-scroll" aria-label="Conversa do Brain">
+      <section
+        ref={scrollRootRef}
+        className="chat-scroll"
+        aria-label="Conversa do Brain"
+        onScroll={onScrollRoot}
+        onWheel={onWheelRoot}
+      >
         <div className="chat-content-column">
           {messages.length === 0 && !loading && !error && (
             <div className="chat-empty">
@@ -262,6 +329,7 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
           flex: 1;
           min-height: 0;
           overflow-y: auto;
+          overflow-anchor: none;
           padding: 8px clamp(16px, 4vw, 40px) 170px;
           user-select: text;
           -webkit-user-select: text;

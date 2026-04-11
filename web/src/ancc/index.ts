@@ -45,6 +45,12 @@ export {
   ANCC_VAULT_MEMORY_CONTRACT,
 } from "@/ancc/rules/prompt-injection.rules";
 export { CORRELATION } from "@/ancc/rules/correlation.rules";
+export {
+  EXPLICIT_CORRELATION,
+  extractExplicitCorrelationHints,
+  mergeVaultCorrelationHits,
+  resolveHintsToExplicitVaultHits,
+} from "@/ancc/pipeline/explicit-correlation-command";
 
 export {
   processInteraction,
