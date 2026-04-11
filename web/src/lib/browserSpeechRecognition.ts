@@ -35,12 +35,47 @@ export type LiveTranscriptionHandlers = {
   onError?: (message: string) => void;
 };
 
+/** Erros que o WebKit dispara durante reinícios ou pausas — não são falhas para o utilizador. */
+function isBenignSpeechRecognitionError(code: string): boolean {
+  return (
+    code === "aborted" ||
+    code === "no-speech" ||
+    /** macOS / iOS WebKit: sessão de áudio ou reconhecimento interrompido; o onend reinicia. */
+    code === "interrupted" ||
+    /** Transiente (rede / serviço Apple / Google). */
+    code === "network"
+  );
+}
+
+function shouldUseWebKitStableMode(): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  if (document.documentElement.hasAttribute("data-brain2-native")) {
+    return true;
+  }
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  const ua = navigator.userAgent;
+  return /AppleWebKit/.test(ua) && !/Chrome\/|Chromium\/|Edg\//.test(ua);
+}
+
+export type StartLiveTranscriptionOptions = {
+  lang?: string;
+  /**
+   * Forçar modo WebKit (continuous=false + reinício com atraso).
+   * Por defeito activa em app nativa (data-brain2-native) ou Safari clássico.
+   */
+  webkitStableMode?: boolean;
+};
+
 /**
- * Inicia reconhecimento contínuo. Devolve função `stop`.
+ * Inicia reconhecimento contínuo (ou por frases em WebKit). Devolve função `stop`.
  */
 export function startLiveTranscription(
   handlers: LiveTranscriptionHandlers,
-  options?: { lang?: string },
+  options?: StartLiveTranscriptionOptions,
 ): () => void {
   const Ctor = getSpeechRecognitionConstructor();
   if (!Ctor) {
@@ -50,11 +85,16 @@ export function startLiveTranscription(
 
   const rec = new Ctor();
   rec.lang = options?.lang ?? "pt-BR";
-  rec.continuous = true;
+  const webkitStable = options?.webkitStableMode ?? shouldUseWebKitStableMode();
+  /** Safari/WKWebView: `continuous=true` tende a erros "interrupted"; frase-a-frase + reinício é mais estável. */
+  rec.continuous = !webkitStable;
   rec.interimResults = true;
   rec.maxAlternatives = 1;
 
   let stopped = false;
+  let restartTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const restartDelayMs = webkitStable ? 240 : 60;
 
   const restart = () => {
     if (stopped) {
@@ -63,7 +103,19 @@ export function startLiveTranscription(
     try {
       rec.start();
     } catch {
-      /* já iniciado */
+      /* já iniciado — WebKit: tentar de novo após um tick */
+      if (webkitStable && !stopped) {
+        restartTimer = setTimeout(() => {
+          restartTimer = null;
+          if (!stopped) {
+            try {
+              rec.start();
+            } catch {
+              /* ignore */
+            }
+          }
+        }, 90);
+      }
     }
   };
 
@@ -83,7 +135,7 @@ export function startLiveTranscription(
   };
 
   rec.onerror = (event: { error: string }) => {
-    if (event.error === "aborted" || event.error === "no-speech") {
+    if (isBenignSpeechRecognitionError(event.error)) {
       return;
     }
     if (event.error === "not-allowed") {
@@ -94,9 +146,16 @@ export function startLiveTranscription(
   };
 
   rec.onend = () => {
-    if (!stopped) {
-      restart();
+    if (stopped) {
+      return;
     }
+    if (restartTimer !== null) {
+      clearTimeout(restartTimer);
+    }
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      restart();
+    }, restartDelayMs);
   };
 
   try {
@@ -107,10 +166,9 @@ export function startLiveTranscription(
 
   return () => {
     stopped = true;
-    try {
-      rec.stop();
-    } catch {
-      /* ignore */
+    if (restartTimer !== null) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
     }
     try {
       rec.abort();
