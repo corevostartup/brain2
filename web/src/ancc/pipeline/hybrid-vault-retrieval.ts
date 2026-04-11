@@ -36,8 +36,14 @@ export function buildRetrievalQueryText(input: {
   userMessage: string;
   sessionSummary?: string;
   recentBullets?: string[];
+  /** Memória entre conversas (localStorage no cliente); reforça correlação semântica. */
+  crossSessionMemory?: string;
 }): string {
   const parts: string[] = [input.userMessage.trim()];
+  const cross = input.crossSessionMemory?.trim();
+  if (cross) {
+    parts.push(`[Recent memory across chats]\n${cross}`);
+  }
   if (input.sessionSummary?.trim()) {
     parts.push(input.sessionSummary.trim());
   }
@@ -97,6 +103,7 @@ export async function hybridRetrieveVaultCorrelationHits(opts: {
   userMessage: string;
   sessionSummary?: string;
   recentBullets?: string[];
+  crossSessionMemory?: string;
   vaultFiles: VaultFileSnapshot[];
   embedTexts: HybridRetrievalEmbedder;
   nowMs?: number;
@@ -109,7 +116,13 @@ export async function hybridRetrieveVaultCorrelationHits(opts: {
     vaultNoteTitles: vaultTitles,
   });
   const topicsExpanded = extractTopics({
-    text: [raw.normalizedText, opts.sessionSummary?.trim() ?? ""].filter(Boolean).join("\n"),
+    text: [
+      raw.normalizedText,
+      opts.sessionSummary?.trim() ?? "",
+      opts.crossSessionMemory?.trim() ?? "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
     vaultNoteTitles: vaultTitles,
   });
   const topics =
@@ -119,6 +132,7 @@ export async function hybridRetrieveVaultCorrelationHits(opts: {
     userMessage: opts.userMessage,
     sessionSummary: opts.sessionSummary,
     recentBullets: opts.recentBullets,
+    crossSessionMemory: opts.crossSessionMemory,
   });
   const keywordSet = tokenizeQueryKeywords(queryText);
 

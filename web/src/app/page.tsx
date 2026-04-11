@@ -85,6 +85,10 @@ import { buildVaultSnapshotsForAncc } from "@/lib/anccVaultSnapshots";
 import { buildAnccRecentBullets } from "@/lib/anccRecentContext";
 import { appendRollingSessionSummary } from "@/lib/anccRollingSummary";
 import {
+  appendRecentMemoryAfterTurn,
+  getRecentMemoryQueryText,
+} from "@/lib/anccRecentMemory";
+import {
   buildVaultConversationMarkdown,
   extractFolderPathFromVaultPath,
   parseVaultConversationMarkdownToChatMessages,
@@ -1492,6 +1496,7 @@ export default function Home() {
 
     try {
       const vaultFiles = buildVaultSnapshotsForAncc(vaultConversations);
+      const crossSessionMemory = getRecentMemoryQueryText();
       let precomputedVaultHits: VaultCorrelationHit[] | undefined;
       if (payload.apiKey.trim()) {
         try {
@@ -1503,6 +1508,7 @@ export default function Home() {
               userMessage: payload.content,
               sessionSummary: anccRollingSummaryRef.current,
               recentBullets: buildAnccRecentBullets(requestMessages),
+              crossSessionMemory: crossSessionMemory || undefined,
               vaultFiles,
             }),
           });
@@ -1526,6 +1532,7 @@ export default function Home() {
         recurrenceTracker: anccSessionRef.current.recurrence,
         recentBullets: buildAnccRecentBullets(requestMessages),
         sessionSummary: anccRollingSummaryRef.current.trim() || undefined,
+        crossSessionMemory: crossSessionMemory || undefined,
         precomputedVaultHits,
         userAssistantDisplayName: displayNameForTurn,
         userPersonalityProfile: personalityForTurn,
@@ -1592,6 +1599,7 @@ export default function Home() {
         payload.content,
         assistantText,
       );
+      appendRecentMemoryAfterTurn(payload.content, assistantText);
 
       const nextMessages = [
         ...requestMessages,

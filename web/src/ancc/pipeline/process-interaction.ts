@@ -57,6 +57,8 @@ export type ProcessInteractionOptions = {
   recentBullets?: string[];
   /** Memória de sessão comprimida (melhora tópicos + query de retrieval). */
   sessionSummary?: string;
+  /** Memória entre conversas (ex.: localStorage), fundida com a mensagem para tópicos e lexical hint. */
+  crossSessionMemory?: string;
   /**
    * Quando definido (ex.: `/api/ancc-retrieve` com embeddings), substitui o correlate só-lexical.
    */
@@ -71,7 +73,13 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
   const nowMs = Date.now();
   const raw = interpretUserInput(opts.userMessage);
   const vaultTitles = opts.vaultFiles.map((f) => f.name.replace(/\.md$/i, ""));
-  const topicSource = [raw.normalizedText, opts.sessionSummary?.trim() ?? ""].filter(Boolean).join("\n");
+  const topicSource = [
+    raw.normalizedText,
+    opts.sessionSummary?.trim() ?? "",
+    opts.crossSessionMemory?.trim() ?? "",
+  ]
+    .filter(Boolean)
+    .join("\n");
   const topicsFromQuery = extractTopics({
     text: raw.normalizedText,
     vaultNoteTitles: vaultTitles,
@@ -152,10 +160,15 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
   const recentBullets = (() => {
     const base = opts.recentBullets ?? [];
     const sum = opts.sessionSummary?.trim();
-    if (!sum) {
-      return base;
+    const cross = opts.crossSessionMemory?.trim();
+    const out: string[] = [];
+    if (cross) {
+      out.push(`Memória recente (outras conversas): ${cross.slice(0, 520)}`);
     }
-    return [`Rumo da conversa: ${sum.slice(0, 420)}`, ...base];
+    if (sum) {
+      out.push(`Rumo da conversa: ${sum.slice(0, 420)}`);
+    }
+    return [...out, ...base];
   })();
 
   const assembled = assembleContext({

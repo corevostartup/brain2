@@ -11,6 +11,8 @@ type RequestBody = {
   userMessage?: string;
   sessionSummary?: string;
   recentBullets?: string[];
+  /** Memória entre conversas (texto já preparado no cliente). */
+  crossSessionMemory?: string;
   vaultFiles?: VaultFileSnapshot[];
 };
 
@@ -72,6 +74,7 @@ export async function POST(request: Request) {
       userMessage,
       sessionSummary: body.sessionSummary,
       recentBullets: body.recentBullets,
+      crossSessionMemory: body.crossSessionMemory,
       vaultFiles,
       embedTexts,
     });
