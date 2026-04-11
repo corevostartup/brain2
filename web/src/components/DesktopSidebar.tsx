@@ -108,6 +108,21 @@ function formatModifiedDate(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
+/** Nota `.md` cujo caminho é exactamente `pasta/arquivo.md`, sem ficheiros em subpastas (`pasta/sub/arquivo.md`). */
+function isMarkdownDirectlyInFolder(filePath: string, folderPath: string): boolean {
+  const file = filePath.replace(/\\/g, "/").trim();
+  const folder = folderPath.replace(/\\/g, "/").trim().replace(/\/+$/, "");
+  if (!folder) {
+    return false;
+  }
+  const prefix = `${folder}/`;
+  if (!file.startsWith(prefix)) {
+    return false;
+  }
+  const relative = file.slice(prefix.length);
+  return relative.length > 0 && !relative.includes("/");
+}
+
 function isValidAvatarPhotoURL(value: string): boolean {
   try {
     const parsed = new URL(value);
@@ -619,12 +634,14 @@ export default function DesktopSidebar({
     };
   }, [createFolderParentPath, folderRows]);
 
+  /** Sem pasta activa (null, `""` ou só espaços) ≡ «Todas as pastas» → lista completa. */
+  const activeFolderFilter = selectedFolderPath?.trim() ?? "";
+
   const filteredConversations = useMemo(() => {
-    const scoped = selectedFolderPath
-      ? vaultConversations.filter(
-          (conversation) =>
-            conversation.path === selectedFolderPath ||
-            conversation.path.startsWith(`${selectedFolderPath}/`)
+    // Com pasta concreta: só `.md` directamente nessa pasta (não em subpastas).
+    const scoped = activeFolderFilter
+      ? vaultConversations.filter((conversation) =>
+          isMarkdownDirectlyInFolder(conversation.path, activeFolderFilter)
         )
       : vaultConversations;
 
@@ -635,7 +652,7 @@ export default function DesktopSidebar({
     );
 
     return [...visibleConversations].sort((a, b) => b.modifiedAt - a.modifiedAt);
-  }, [selectedFolderPath, vaultConversations]);
+  }, [activeFolderFilter, vaultConversations]);
 
   const renameConversationExistsInFilter = useMemo(() => {
     if (!renameConversationPath) {
@@ -716,81 +733,6 @@ export default function DesktopSidebar({
         </button>
 
         <div className="sidebar-main-split">
-        <section className="section-block conversations-section" aria-label="Todas as conversas">
-          <p className="section-title">Todas as conversas</p>
-          <p className="section-subtitle">
-            {vaultLoading
-              ? "Carregando conversas..."
-              : selectedFolderPath
-              ? `${filteredConversations.length} arquivos .md em ${selectedFolderPath}`
-              : `${filteredConversations.length} arquivos .md no vault`}
-          </p>
-          <ul className="item-list conversation-list">
-            {vaultLoading && filteredConversations.length === 0
-              ? (
-                <li className="vault-loading-row" aria-live="polite" aria-busy="true">
-                  <span className="vault-loading-indicator">
-                    <LoaderCircle className="vault-loading-spinner" size={13} strokeWidth={1.8} />
-                    <span>Carregando conversas...</span>
-                  </span>
-                </li>
-                )
-              : filteredConversations.length > 0
-              ? filteredConversations.map((conversation) => (
-              <li key={conversation.id}>
-                {renameConversationPath === conversation.path ? (
-                  <div
-                    className="list-item conversation-item conversation-item--editing"
-                    title={conversation.path}
-                  >
-                    <MessageSquare size={13} strokeWidth={1.8} />
-                    <input
-                      ref={renameConversationInputRef}
-                      className="rename-conversation-input"
-                      type="text"
-                      value={renameConversationName}
-                      onChange={(event) => setRenameConversationName(event.target.value)}
-                      onKeyDown={handleRenameConversationKeyDown}
-                      onBlur={() => {
-                        if (renameConversationSubmitting) {
-                          return;
-                        }
-                        const trimmed = renameConversationName.trim();
-                        if (!trimmed || trimmed === renameConversationOriginalTitle) {
-                          closeRenameConversationInput();
-                          return;
-                        }
-                        void submitRenameConversation();
-                      }}
-                      spellCheck={false}
-                      aria-label="Renomear conversa"
-                      disabled={renameConversationSubmitting}
-                    />
-                  </div>
-                ) : (
-                  <button
-                    className={`list-item conversation-item${selectedConversationId === conversation.id ? " conversation-item--active" : ""}`}
-                    type="button"
-                    title={conversation.path}
-                    onClick={() => onConversationSelect?.(conversation)}
-                    onContextMenu={(event) => handleConversationContextMenu(event, conversation)}
-                    aria-pressed={selectedConversationId === conversation.id}
-                  >
-                    <MessageSquare size={13} strokeWidth={1.8} />
-                    <span>{formatConversationDisplayTitle(conversation.title) || conversation.title}</span>
-                    <small className="conversation-meta">{formatModifiedDate(conversation.modifiedAt)}</small>
-                  </button>
-                )}
-              </li>
-              ))
-              : (
-                <li>
-                  <span className="vault-empty-hint">Nenhum arquivo .md encontrado para esta pasta.</span>
-                </li>
-              )}
-          </ul>
-        </section>
-
         <section className="section-block folders-section" aria-label="Pastas">
           <div className="section-header-row">
             <p className="section-title">Pastas</p>
@@ -963,6 +905,81 @@ export default function DesktopSidebar({
                       </li>
                       )}
                 </>
+              )}
+          </ul>
+        </section>
+
+        <section className="section-block conversations-section" aria-label="Todas as conversas">
+          <p className="section-title">Todas as conversas</p>
+          <p className="section-subtitle">
+            {vaultLoading
+              ? "Carregando conversas..."
+              : activeFolderFilter
+              ? `${filteredConversations.length} arquivos .md em ${activeFolderFilter}`
+              : `${filteredConversations.length} arquivos .md no vault`}
+          </p>
+          <ul className="item-list conversation-list">
+            {vaultLoading && filteredConversations.length === 0
+              ? (
+                <li className="vault-loading-row" aria-live="polite" aria-busy="true">
+                  <span className="vault-loading-indicator">
+                    <LoaderCircle className="vault-loading-spinner" size={13} strokeWidth={1.8} />
+                    <span>Carregando conversas...</span>
+                  </span>
+                </li>
+                )
+              : filteredConversations.length > 0
+              ? filteredConversations.map((conversation) => (
+              <li key={conversation.id}>
+                {renameConversationPath === conversation.path ? (
+                  <div
+                    className="list-item conversation-item conversation-item--editing"
+                    title={conversation.path}
+                  >
+                    <MessageSquare size={13} strokeWidth={1.8} />
+                    <input
+                      ref={renameConversationInputRef}
+                      className="rename-conversation-input"
+                      type="text"
+                      value={renameConversationName}
+                      onChange={(event) => setRenameConversationName(event.target.value)}
+                      onKeyDown={handleRenameConversationKeyDown}
+                      onBlur={() => {
+                        if (renameConversationSubmitting) {
+                          return;
+                        }
+                        const trimmed = renameConversationName.trim();
+                        if (!trimmed || trimmed === renameConversationOriginalTitle) {
+                          closeRenameConversationInput();
+                          return;
+                        }
+                        void submitRenameConversation();
+                      }}
+                      spellCheck={false}
+                      aria-label="Renomear conversa"
+                      disabled={renameConversationSubmitting}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    className={`list-item conversation-item${selectedConversationId === conversation.id ? " conversation-item--active" : ""}`}
+                    type="button"
+                    title={conversation.path}
+                    onClick={() => onConversationSelect?.(conversation)}
+                    onContextMenu={(event) => handleConversationContextMenu(event, conversation)}
+                    aria-pressed={selectedConversationId === conversation.id}
+                  >
+                    <MessageSquare size={13} strokeWidth={1.8} />
+                    <span>{formatConversationDisplayTitle(conversation.title) || conversation.title}</span>
+                    <small className="conversation-meta">{formatModifiedDate(conversation.modifiedAt)}</small>
+                  </button>
+                )}
+              </li>
+              ))
+              : (
+                <li>
+                  <span className="vault-empty-hint">Nenhum arquivo .md encontrado para esta pasta.</span>
+                </li>
               )}
           </ul>
         </section>
