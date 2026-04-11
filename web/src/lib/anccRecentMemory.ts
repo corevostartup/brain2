@@ -1,94 +1,63 @@
 /**
- * Memória recente entre conversas (localStorage) — fundida na query de retrieval ANCC
- * para correlacionar perguntas vagas com planos ou detalhes de sessões anteriores.
+ * Memória recente entre conversas ANCC — **apenas persistência em localStorage** (WebKit / app macOS),
+ * fundida na query de retrieval. **Não** grava no vault, **não** aparece no grafo «Your Brain».
+ *
+ * Migração futura (Firebase): ver `recentMemoryFirestore.types.ts` e `getRecentMemoryPersistence()`.
  */
 
-const STORAGE_KEY = "brain2-ancc-recent-memory-v1";
+import type { RecentMemoryEntry, RecentMemoryState } from "@/lib/anccRecentMemoryTypes";
+import { getRecentMemoryPersistence } from "@/lib/anccRecentMemoryStorage";
+
+export type { RecentMemoryEntry, RecentMemoryState } from "@/lib/anccRecentMemoryTypes";
+export { RECENT_MEMORY_LOCAL_STORAGE_KEY } from "@/lib/anccRecentMemoryStorage";
 
 const MAX_ENTRIES = 32;
 const MAX_ENTRY_USER_CHARS = 160;
 const MAX_ENTRY_ASSISTANT_CHARS = 220;
-/** Caracteres máximos injectados na query (decaimento por idade + orçamento). */
 const MAX_QUERY_CHARS = 1800;
-/** Dias para meia-vida do peso exp(-age/tau). */
 const DECAY_TAU_DAYS = 5;
-
-export type RecentMemoryEntry = {
-  id: string;
-  /** Linha compacta: opcionalmente com prefixo de data ISO. */
-  text: string;
-  createdAt: number;
-};
-
-export type RecentMemoryState = {
-  version: 1;
-  entries: RecentMemoryEntry[];
-};
-
-function emptyState(): RecentMemoryState {
-  return { version: 1, entries: [] };
-}
 
 function randomId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-export function loadRecentMemoryState(): RecentMemoryState {
-  if (typeof window === "undefined") {
-    return emptyState();
-  }
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return emptyState();
-    }
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return emptyState();
-    }
-    const p = parsed as Partial<RecentMemoryState>;
-    if (p.version !== 1 || !Array.isArray(p.entries)) {
-      return emptyState();
-    }
-    const entries: RecentMemoryEntry[] = [];
-    for (const e of p.entries) {
-      if (
-        e &&
-        typeof e === "object" &&
-        typeof (e as RecentMemoryEntry).id === "string" &&
-        typeof (e as RecentMemoryEntry).text === "string" &&
-        typeof (e as RecentMemoryEntry).createdAt === "number"
-      ) {
-        const text = (e as RecentMemoryEntry).text.replace(/\s+/g, " ").trim().slice(0, 900);
-        if (text.length > 0) {
-          entries.push({
-            id: (e as RecentMemoryEntry).id,
-            text,
-            createdAt: (e as RecentMemoryEntry).createdAt,
-          });
-        }
+function normalizeRecentMemoryState(raw: RecentMemoryState): RecentMemoryState {
+  const entries: RecentMemoryEntry[] = [];
+  for (const e of raw.entries) {
+    if (
+      e &&
+      typeof e === "object" &&
+      typeof e.id === "string" &&
+      typeof e.text === "string" &&
+      typeof e.createdAt === "number"
+    ) {
+      const text = e.text.replace(/\s+/g, " ").trim().slice(0, 900);
+      if (text.length > 0) {
+        entries.push({
+          id: e.id,
+          text,
+          createdAt: e.createdAt,
+        });
       }
     }
-    return { version: 1, entries: entries.slice(0, MAX_ENTRIES) };
-  } catch {
-    return emptyState();
   }
+  return { version: 1, entries: entries.slice(0, MAX_ENTRIES) };
+}
+
+export function loadRecentMemoryState(): RecentMemoryState {
+  const persistence = getRecentMemoryPersistence();
+  const raw = persistence.load();
+  return normalizeRecentMemoryState(raw);
 }
 
 function saveRecentMemoryState(state: RecentMemoryState): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    /* quota */
-  }
+  const persistence = getRecentMemoryPersistence();
+  persistence.save(normalizeRecentMemoryState(state));
 }
 
 /**
  * Após uma resposta bem-sucedida do assistente, regista um extracto deste turno
- * (atravessa conversas / pastas).
+ * (atravessa conversas / pastas). Armazenamento: localStorage apenas (não vault / grafo).
  */
 export function appendRecentMemoryAfterTurn(userMessage: string, assistantMessage: string): void {
   const u = userMessage.replace(/\s+/g, " ").trim().slice(0, MAX_ENTRY_USER_CHARS);
@@ -110,8 +79,7 @@ export function appendRecentMemoryAfterTurn(userMessage: string, assistantMessag
 }
 
 /**
- * Texto para fundir na query híbrida: entradas mais recentes e mais pesadas (decaimento exponencial),
- * até esgotar orçamento de caracteres.
+ * Texto para fundir na query híbrida: decaimento exponencial até esgotar orçamento.
  */
 export function getRecentMemoryQueryText(nowMs: number = Date.now()): string {
   const state = loadRecentMemoryState();
@@ -145,12 +113,5 @@ export function getRecentMemoryQueryText(nowMs: number = Date.now()): string {
 }
 
 export function clearRecentMemory(): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* ignore */
-  }
+  getRecentMemoryPersistence().clear();
 }
