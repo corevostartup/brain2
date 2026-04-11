@@ -5,6 +5,7 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { X, Mic, MicOff } from "lucide-react";
 import * as THREE from "three";
 import BrainGraphView from "@/components/BrainGraphView";
+import { getSpeechRecognitionConstructor, startLiveTranscription } from "@/lib/browserSpeechRecognition";
 import type { VaultGraph } from "@/lib/vault";
 
 type AdvancedVoiceSphereViewProps = {
@@ -108,6 +109,8 @@ export default function AdvancedVoiceSphereView({
   const speechEnvelopeRef = useRef(0);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const [sttHint, setSttHint] = useState<string | null>(null);
 
   useEffect(() => {
     const syncTheme = () => setThemeMode(resolveThemeMode());
@@ -122,7 +125,7 @@ export default function AdvancedVoiceSphereView({
 
   useEffect(() => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setMicStatus("unsupported");
+      queueMicrotask(() => setMicStatus("unsupported"));
       return;
     }
 
@@ -211,6 +214,45 @@ export default function AdvancedVoiceSphereView({
     };
   }, []);
 
+  useEffect(() => {
+    if (micStatus !== "listening") {
+      return;
+    }
+    if (!getSpeechRecognitionConstructor()) {
+      queueMicrotask(() => {
+        setSttHint("Reconhecimento de voz indisponível neste browser. Use Chrome ou Safari recente.");
+      });
+      return;
+    }
+
+    const stop = startLiveTranscription(
+      {
+        onText: (text) => {
+          setLiveTranscript(text);
+          setSttHint(null);
+        },
+        onError: (code) => {
+          if (code === "denied") {
+            setSttHint("Permissão de microfone ou reconhecimento de voz recusada.");
+          } else if (code === "unsupported") {
+            setSttHint("Reconhecimento de voz indisponível neste browser.");
+          } else if (code !== "aborted") {
+            setSttHint("Reconhecimento interrompido. Fale de novo para continuar.");
+          }
+        },
+      },
+      { lang: "pt-BR" },
+    );
+
+    return () => {
+      stop();
+      queueMicrotask(() => {
+        setLiveTranscript("");
+        setSttHint(null);
+      });
+    };
+  }, [micStatus]);
+
   const noop = useCallback(() => {}, []);
 
   const palette = themeMode === "light" ? LIGHT_PALETTE : DARK_PALETTE;
@@ -262,21 +304,48 @@ export default function AdvancedVoiceSphereView({
         />
       </div>
 
-      <div className="advanced-voice-mic-wrap">
-        <span className="advanced-voice-mic-ring" style={micRingStyle} aria-hidden />
-        <button
-          type="button"
-          className="advanced-voice-fab-mic"
-          aria-label={micLabel}
-          title={micLabel}
-          disabled={micStatus === "unsupported"}
+      <div className="advanced-voice-voice-dock">
+        <div
+          className="advanced-voice-transcript-wrap"
+          aria-live="polite"
+          aria-relevant="additions text"
+          role="log"
         >
-          {micStatus === "denied" || micStatus === "unsupported" ? (
-            <MicOff size={18} strokeWidth={2} aria-hidden />
+          {micStatus === "listening" ? (
+            liveTranscript ? (
+              <p className="advanced-voice-transcript-text">{liveTranscript}</p>
+            ) : sttHint ? (
+              <p className="advanced-voice-transcript-hint">{sttHint}</p>
+            ) : (
+              <p className="advanced-voice-transcript-placeholder">
+                À escuta… fale — a transcrição aparece aqui em tempo real.
+              </p>
+            )
+          ) : micStatus === "denied" ? (
+            <p className="advanced-voice-transcript-hint">Microfone bloqueado — transcrição indisponível.</p>
+          ) : micStatus === "unsupported" ? (
+            <p className="advanced-voice-transcript-hint">Microfone não disponível neste ambiente.</p>
           ) : (
-            <Mic size={18} strokeWidth={2} aria-hidden />
+            <p className="advanced-voice-transcript-placeholder">A preparar áudio…</p>
           )}
-        </button>
+        </div>
+
+        <div className="advanced-voice-mic-wrap">
+          <span className="advanced-voice-mic-ring" style={micRingStyle} aria-hidden />
+          <button
+            type="button"
+            className="advanced-voice-fab-mic"
+            aria-label={micLabel}
+            title={micLabel}
+            disabled={micStatus === "unsupported"}
+          >
+            {micStatus === "denied" || micStatus === "unsupported" ? (
+              <MicOff size={18} strokeWidth={2} aria-hidden />
+            ) : (
+              <Mic size={18} strokeWidth={2} aria-hidden />
+            )}
+          </button>
+        </div>
       </div>
 
       <style jsx>{`
@@ -337,14 +406,77 @@ export default function AdvancedVoiceSphereView({
           background: transparent;
         }
 
-        .advanced-voice-mic-wrap {
+        .advanced-voice-voice-dock {
           position: absolute;
-          left: 50%;
-          bottom: clamp(18px, 4vh, 36px);
-          transform: translateX(-50%);
+          left: 0;
+          right: 0;
+          bottom: 0;
           z-index: 30;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 12px;
+          padding: 0 14px clamp(18px, 4vh, 36px);
+          pointer-events: none;
+        }
+
+        .advanced-voice-transcript-wrap {
+          width: min(520px, 94vw);
+          max-height: min(30vh, 220px);
+          min-height: 52px;
+          overflow-x: hidden;
+          overflow-y: auto;
+          padding: 12px 14px;
+          border-radius: 14px;
+          border: 1px solid var(--bar-border);
+          background: rgba(10, 11, 14, 0.58);
+          backdrop-filter: blur(14px);
+          pointer-events: auto;
+          box-sizing: border-box;
+        }
+
+        .advanced-voice-root--light .advanced-voice-transcript-wrap {
+          background: rgba(255, 255, 255, 0.72);
+        }
+
+        .advanced-voice-transcript-text {
+          margin: 0;
+          font-family: 'Inter', system-ui, sans-serif;
+          font-size: 13px;
+          font-weight: 450;
+          line-height: 1.5;
+          color: var(--foreground);
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+
+        .advanced-voice-transcript-placeholder {
+          margin: 0;
+          font-family: 'Inter', system-ui, sans-serif;
+          font-size: 12px;
+          font-weight: 400;
+          line-height: 1.45;
+          color: var(--muted);
+          font-style: italic;
+        }
+
+        .advanced-voice-transcript-hint {
+          margin: 0;
+          font-family: 'Inter', system-ui, sans-serif;
+          font-size: 12px;
+          line-height: 1.45;
+          color: #c9a227;
+        }
+
+        .advanced-voice-root--light .advanced-voice-transcript-hint {
+          color: #8a6d1a;
+        }
+
+        .advanced-voice-mic-wrap {
+          position: relative;
           width: 52px;
           height: 52px;
+          flex-shrink: 0;
           pointer-events: none;
         }
 
