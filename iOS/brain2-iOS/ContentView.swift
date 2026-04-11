@@ -2,67 +2,86 @@
 //  ContentView.swift
 //  brain2-iOS
 //
-//  Created by Cássio on 03/04/26.
-//
 
 import SwiftUI
-import WebKit
+
+private let brain2WebURL = "https://brain2corevo.netlify.app/"
 
 struct ContentView: View {
-    var body: some View {
-        WebView(urlString: "https://brain2corevo.netlify.app/")
-            .ignoresSafeArea()
-    }
-}
+    @AppStorage("brain2_ios_native_gate_done") private var nativeGateDone = false
 
-struct WebView: UIViewRepresentable {
-    let urlString: String
+    @State private var pendingBootstrapTokens: Brain2WebView.PendingGoogleTokens?
+    @State private var oauthBusy = false
+    @State private var oauthAlertMessage: String?
+    @State private var showOAuthAlert = false
 
-    func makeUIView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        let webView = WKWebView(frame: .zero, configuration: config)
-        
-        // Disable scrolling and bouncing
-        webView.scrollView.isScrollEnabled = false
-        webView.scrollView.bounces = false
-        webView.scrollView.bouncesZoom = false
-        webView.isOpaque = false
-        webView.backgroundColor = UIColor(red: 12/255, green: 12/255, blue: 12/255, alpha: 1)
-        
-        // Disable gestures
-        webView.allowsBackForwardNavigationGestures = false
-        
-        // Inject CSS to disable zoom and fill screen
-        let injectedJS = """
-        var meta = document.createElement('meta');
-        meta.name = 'viewport';
-        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover';
-        document.head.appendChild(meta);
-        
-        document.addEventListener('touchmove', function(e) {
-          if (e.touches.length > 1) {
-            e.preventDefault();
-          }
-        }, false);
-        """
-        
-        let userScript = WKUserScript(source: injectedJS, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-        config.userContentController.addUserScript(userScript)
-        
-        loadURL(in: webView)
-        return webView
-    }
+    private let oauthController = GoogleOAuthSignInController()
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {
-        guard let currentURL = uiView.url?.absoluteString else { return }
-        if currentURL != urlString {
-            loadURL(in: uiView)
+    private var configurationHint: String? {
+        let id = NativeOAuthSecrets.googleOAuthClientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if id.isEmpty {
+            return "Adicione o ID cliente Web do Firebase em NativeOAuthSecrets.Local.swift e registe brain2auth://oauth-callback na Google Cloud."
         }
+        return nil
     }
 
-    private func loadURL(in webView: WKWebView) {
-        guard let url = URL(string: urlString) else { return }
-        webView.load(URLRequest(url: url))
+    var body: some View {
+        Group {
+            if nativeGateDone {
+                Brain2WebView(
+                    urlString: brain2WebURL,
+                    pendingGoogleTokens: pendingBootstrapTokens,
+                    onTokensDelivered: {
+                        pendingBootstrapTokens = nil
+                    }
+                )
+                .ignoresSafeArea()
+            } else {
+                IOSGoogleSignInScreen(
+                    isBusy: oauthBusy,
+                    configurationError: configurationHint,
+                    onGoogleSignIn: { startGoogleOAuth() },
+                    onContinueToWeb: {
+                        nativeGateDone = true
+                    }
+                )
+            }
+        }
+        .alert("Login Google", isPresented: $showOAuthAlert, actions: {
+            Button("OK", role: .cancel) {}
+        }, message: {
+            Text(oauthAlertMessage ?? "")
+        })
+    }
+
+    private func startGoogleOAuth() {
+        if configurationHint != nil {
+            showOAuthAlert = true
+            oauthAlertMessage = configurationHint
+            return
+        }
+
+        oauthBusy = true
+        oauthController.startGoogleSignIn { result in
+            oauthBusy = false
+            switch result {
+            case .success(let tokens):
+                pendingBootstrapTokens = Brain2WebView.PendingGoogleTokens(
+                    idToken: tokens.idToken,
+                    accessToken: tokens.accessToken
+                )
+                nativeGateDone = true
+            case .failure(let error):
+                let ns = error as NSError
+                // Utilizador fechou o painel de login (domínio AuthenticationServices, código 1).
+                if ns.domain == "com.apple.AuthenticationServices.WebAuthenticationSession",
+                   ns.code == 1 {
+                    return
+                }
+                oauthAlertMessage = ns.localizedDescription
+                showOAuthAlert = true
+            }
+        }
     }
 }
 
