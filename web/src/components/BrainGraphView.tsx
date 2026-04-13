@@ -126,6 +126,10 @@ type BrainGraphViewProps = {
   variant?: "default" | "spectator";
   liveSpeechNodeStrength?: Map<string, number>;
   liveSpeechLinkKeys?: Set<string>;
+  /** Arestas sintéticas (sem wikilink directo) entre assuntos activos — visual mais subtil que `liveSpeechLinkKeys`. */
+  liveSpeechWeakLinkKeys?: Set<string>;
+  /** Arestas do vault no caminho mais curto entre assuntos sem ligação directa — mais visível que a corda sintética, mais discreto que o destaque directo. */
+  liveSpeechPathLinkKeys?: Set<string>;
   /** Fase (rad) para pulsar ligações/nós correlacionados ao discurso. */
   liveSpeechPulsePhase?: number;
   /** Esconder legenda + rodapé ANCC (embutido noutro ecrã). */
@@ -196,6 +200,8 @@ export default function BrainGraphView({
   variant = "default",
   liveSpeechNodeStrength,
   liveSpeechLinkKeys,
+  liveSpeechWeakLinkKeys,
+  liveSpeechPathLinkKeys,
   liveSpeechPulsePhase = 0,
   compactChrome = false,
   hideCloseButton = false,
@@ -275,6 +281,22 @@ export default function BrainGraphView({
     return m;
   }, [activeEdges]);
 
+  /** Só estrutura do vault — não muda com a fala (evita “refresh” do force graph / zoom). */
+  const topologyGraphKey = useMemo(
+    () => `${useVault ? "v" : "m"}-${activeNodes.length}-${activeEdges.length}`,
+    [useVault, activeNodes.length, activeEdges.length],
+  );
+
+  /** Cordas “fracas” desenhadas no pós-frame — não entram no `graphData` para não reiniciar a física. */
+  const spectatorWeakKeysRef = useRef<Set<string> | undefined>(undefined);
+  const spectatorPulseRef = useRef(0);
+  useEffect(() => {
+    spectatorWeakKeysRef.current = liveSpeechWeakLinkKeys;
+  }, [liveSpeechWeakLinkKeys]);
+  useEffect(() => {
+    spectatorPulseRef.current = liveSpeechPulsePhase;
+  }, [liveSpeechPulsePhase]);
+
   const dragEgoSet = useMemo(() => {
     if (!focusRootId) return null as Set<string> | null;
     const s = new Set<string>([focusRootId]);
@@ -305,7 +327,7 @@ export default function BrainGraphView({
       };
     });
 
-    const links: LinkObject<BrainNode, BrainLink>[] = activeEdges.map((e) => {
+    const vaultLinks: LinkObject<BrainNode, BrainLink>[] = activeEdges.map((e) => {
       const ds = degreeMap[e.source] || 1;
       const dt = degreeMap[e.target] || 1;
       const avg = (ds + dt) / 2;
@@ -327,12 +349,62 @@ export default function BrainGraphView({
       };
     });
 
-    return { nodes, links };
-  }, [activeNodes, activeEdges, degreeMap, groupMap, dims.h, dims.w, isNativeShell, useVault]);
+    return { nodes, links: vaultLinks };
+  }, [
+    activeNodes,
+    activeEdges,
+    degreeMap,
+    groupMap,
+    dims.h,
+    dims.w,
+    isNativeShell,
+    useVault,
+  ]);
 
-  const graphKey = useMemo(
-    () => `${useVault ? "v" : "m"}-${graphData.nodes.length}-${graphData.links.length}`,
-    [useVault, graphData.nodes.length, graphData.links.length]
+  /** Traços fracos entre assuntos (só vault no `graphData`); callback estável para não invalidar o canvas. */
+  const onRenderFramePostSpectatorWeak = useCallback(
+    (ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const keys = spectatorWeakKeysRef.current;
+      if (!keys?.size) return;
+      const fg = fgRef.current as unknown as
+        | { graphData?: () => GraphData<BrainNode, BrainLink> }
+        | undefined;
+      const data = fg?.graphData?.();
+      const nodes = data?.nodes;
+      if (!nodes?.length) return;
+      const pos = new Map<string, { x: number; y: number }>();
+      for (const n of nodes) {
+        const id = String(n.id);
+        const x = n.x;
+        const y = n.y;
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          pos.set(id, { x: x!, y: y! });
+        }
+      }
+      const phase = spectatorPulseRef.current;
+      ctx.save();
+      ctx.lineCap = "round";
+      const dash = 3.2 / Math.max(globalScale, 0.08);
+      ctx.setLineDash([dash, dash * 0.85]);
+      for (const k of keys) {
+        const sep = k.indexOf("|");
+        if (sep <= 0) continue;
+        const a = k.slice(0, sep);
+        const b = k.slice(sep + 1);
+        const pa = pos.get(a);
+        const pb = pos.get(b);
+        if (!pa || !pb) continue;
+        const pulse = 0.38 + 0.62 * Math.sin(phase * 0.92);
+        ctx.strokeStyle = `hsla(262, 36%, 56%, ${0.09 + pulse * 0.1})`;
+        ctx.lineWidth = (0.28 + pulse * 0.32) / Math.max(globalScale, 0.08);
+        ctx.beginPath();
+        ctx.moveTo(pa.x, pa.y);
+        ctx.lineTo(pb.x, pb.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    },
+    [],
   );
 
   useEffect(() => {
@@ -364,7 +436,7 @@ export default function BrainGraphView({
       window.removeEventListener("pointerup", onPointerUp, true);
       window.removeEventListener("pointercancel", onPointerUp, true);
     };
-  }, [loading, graphKey]);
+  }, [loading, topologyGraphKey]);
 
   useLayoutEffect(() => {
     if (loading) return;
@@ -487,7 +559,7 @@ export default function BrainGraphView({
     return () => {
       cancelled = true;
     };
-  }, [graphData, graphKey, dims.w, dims.h, isNativeShell, useVault, variant]);
+  }, [topologyGraphKey, dims.w, dims.h, isNativeShell, useVault, variant]);
 
   /** Movimento “orgânico” do grafo em função do nível de áudio (conversa avançada). */
   useEffect(() => {
@@ -542,11 +614,11 @@ export default function BrainGraphView({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [variant, useVault, loading, graphKey, isNativeShell]);
+  }, [variant, useVault, loading, topologyGraphKey, isNativeShell]);
 
   useEffect(() => {
     nativeSpreadRecoveryRef.current = false;
-  }, [graphKey]);
+  }, [topologyGraphKey]);
 
   useEffect(() => {
     if (!isNativeShell || !useVault || loading) {
@@ -597,7 +669,7 @@ export default function BrainGraphView({
       frameCount = 0;
 
       emitNativeDebug("brain-graph-stats", {
-        graphKey,
+        graphKey: topologyGraphKey,
         dimsW: dims.w,
         dimsH: dims.h,
         nodes: nodes.length,
@@ -617,7 +689,7 @@ export default function BrainGraphView({
       window.clearInterval(timer);
       cancelAnimationFrame(rafId);
     };
-  }, [dims.h, dims.w, graphKey, highlightLinks.size, hoverId, isNativeShell, loading, useVault]);
+  }, [dims.h, dims.w, topologyGraphKey, highlightLinks.size, hoverId, isNativeShell, loading, useVault]);
 
   useEffect(() => {
     if (!isNativeShell || !useVault || dims.w < 64 || dims.h < 64) {
@@ -683,7 +755,7 @@ export default function BrainGraphView({
     return () => {
       window.clearTimeout(timer);
     };
-  }, [dims.h, dims.w, graphKey, isNativeShell, useVault]);
+  }, [dims.h, dims.w, topologyGraphKey, isNativeShell, useVault]);
 
   const highlightSet = useMemo(() => {
     if (!hoverId) return null as Set<string> | null;
@@ -777,6 +849,15 @@ export default function BrainGraphView({
       }
       if (
         variant === "spectator" &&
+        liveSpeechPathLinkKeys &&
+        liveSpeechPathLinkKeys.size > 0 &&
+        liveSpeechPathLinkKeys.has(k)
+      ) {
+        const pulse = 0.4 + 0.6 * Math.sin(liveSpeechPulsePhase * 1.02);
+        return `hsla(248, 64%, 64%, ${0.26 + pulse * 0.18})`;
+      }
+      if (
+        variant === "spectator" &&
         liveSpeechNodeStrength &&
         liveSpeechNodeStrength.size > 0
       ) {
@@ -808,6 +889,7 @@ export default function BrainGraphView({
       dragEgoSet,
       variant,
       liveSpeechLinkKeys,
+      liveSpeechPathLinkKeys,
       liveSpeechNodeStrength,
       liveSpeechPulsePhase,
       liveAudioEnergy,
@@ -826,6 +908,10 @@ export default function BrainGraphView({
       ) {
         const pulse = 0.62 + 0.38 * Math.sin(liveSpeechPulsePhase * 1.05);
         return 0.95 + pulse * 1.35;
+      }
+      if (variant === "spectator" && liveSpeechPathLinkKeys && liveSpeechPathLinkKeys.has(k)) {
+        const pulse = 0.45 + 0.55 * Math.sin(liveSpeechPulsePhase * 0.98);
+        return 0.72 + pulse * 0.78;
       }
       if (variant === "spectator" && (!liveSpeechLinkKeys || liveSpeechLinkKeys.size === 0)) {
         const e = Math.min(1, Math.max(0, liveAudioEnergy ?? 0));
@@ -849,6 +935,7 @@ export default function BrainGraphView({
       dragEgoSet,
       variant,
       liveSpeechLinkKeys,
+      liveSpeechPathLinkKeys,
       liveSpeechPulsePhase,
       liveAudioEnergy,
     ]
@@ -857,14 +944,33 @@ export default function BrainGraphView({
   const linkDirectionalParticles = useCallback(
     (link: LinkObject<BrainNode, BrainLink>) => {
       if (variant !== "spectator") return 0;
+      const a = nodeIdOf(link.source);
+      const b = nodeIdOf(link.target);
+      const k = linkKey(a, b);
+      if (liveSpeechLinkKeys?.size && liveSpeechLinkKeys.has(k)) {
+        return 6;
+      }
+      if (liveSpeechPathLinkKeys?.has(k)) {
+        return 4;
+      }
       if (liveSpeechLinkKeys?.size) {
-        const a = nodeIdOf(link.source);
-        const b = nodeIdOf(link.target);
-        return liveSpeechLinkKeys.has(linkKey(a, b)) ? 6 : 0;
+        return 0;
       }
       return 1;
     },
-    [variant, liveSpeechLinkKeys]
+    [variant, liveSpeechLinkKeys, liveSpeechPathLinkKeys]
+  );
+
+  const linkDirectionalParticleWidth = useCallback(
+    (link: LinkObject<BrainNode, BrainLink>) => {
+      if (variant !== "spectator") return 0;
+      const k = linkKey(nodeIdOf(link.source), nodeIdOf(link.target));
+      if (liveSpeechPathLinkKeys?.has(k)) {
+        return 1.62;
+      }
+      return 1.35;
+    },
+    [variant, liveSpeechPathLinkKeys]
   );
 
   const nodeCanvasObjectMode = useCallback(() => "after" as const, []);
@@ -988,19 +1094,19 @@ export default function BrainGraphView({
 
   const onEngineStop = useCallback(() => {
     if (dims.w < 48 || dims.h < 48) return;
-    const fitKey = `${graphKey}|${dims.w}x${dims.h}`;
+    const fitKey = `${topologyGraphKey}|${dims.w}x${dims.h}`;
     if (fitDoneKey.current === fitKey) return;
     fitDoneKey.current = fitKey;
-    emitNativeDebug("brain-engine-stop", { graphKey, fitKey, dimsW: dims.w, dimsH: dims.h });
+    emitNativeDebug("brain-engine-stop", { graphKey: topologyGraphKey, fitKey, dimsW: dims.w, dimsH: dims.h });
     fgRef.current?.zoomToFit(480, 36);
-  }, [graphKey, dims.w, dims.h]);
+  }, [topologyGraphKey, dims.w, dims.h]);
 
   const onBackgroundClick = useCallback((_event: MouseEvent) => {
     hoverIdRef.current = null;
     setHoverId(null);
     setHighlightLinks(new Set());
-    emitNativeDebug("brain-background-click", { graphKey });
-  }, [graphKey]);
+    emitNativeDebug("brain-background-click", { graphKey: topologyGraphKey });
+  }, [topologyGraphKey]);
 
   return (
     <div className="brain-graph-root">
@@ -1055,7 +1161,7 @@ export default function BrainGraphView({
                     }
                   : 0
               }
-              linkDirectionalParticleWidth={variant === "spectator" ? 1.35 : 0}
+              linkDirectionalParticleWidth={variant === "spectator" ? linkDirectionalParticleWidth : 0}
               d3VelocityDecay={
                 variant === "spectator"
                   ? PHYSICS.spectatorVelocityDecay
@@ -1097,6 +1203,7 @@ export default function BrainGraphView({
               onNodeDragEnd={onNodeDragEnd}
               onBackgroundClick={variant === "spectator" ? () => undefined : onBackgroundClick}
               onEngineStop={onEngineStop}
+              onRenderFramePost={variant === "spectator" ? onRenderFramePostSpectatorWeak : undefined}
             />
           </div>
         </>

@@ -21,7 +21,12 @@ import {
   type CloudProvider,
   type VaultStorageMode,
 } from "@/lib/vaultCloudConfig";
-import { MAX_CUSTOM_PERSONALITY_CHARS } from "@/lib/userPersonalityProfile";
+import {
+  MAX_CUSTOM_PERSONALITY_CHARS,
+  PERSONALITY_TRAIT_META,
+  TRAIT_ORDER,
+  type PersonalityTraitId,
+} from "@/lib/userPersonalityProfile";
 
 type SettingsViewProps = {
   onClose: () => void;
@@ -35,6 +40,9 @@ type SettingsViewProps = {
   /** Texto livre de personalidade (persistido com os traços 0–100). */
   customPersonalityNotes?: string;
   onSaveCustomPersonalityNotes?: (value: string) => void;
+  /** Traços 0–100 (mesmo armazenamento que o chat). */
+  personalityTraits?: Partial<Record<PersonalityTraitId, number>>;
+  onPersonalityTraitsPatch?: (patch: Partial<Record<PersonalityTraitId, number>>) => void;
 };
 
 type NativeBridge = {
@@ -112,6 +120,8 @@ export default function SettingsView({
   onForceOnboarding,
   customPersonalityNotes = "",
   onSaveCustomPersonalityNotes,
+  personalityTraits = {},
+  onPersonalityTraitsPatch,
 }: SettingsViewProps) {
   const [vaultPath, setVaultPath] = useState<string>(() => (
     typeof window === "undefined" ? "" : (loadVaultPath() ?? "")
@@ -133,6 +143,14 @@ export default function SettingsView({
   const [googleDriveSelectedFolderId, setGoogleDriveSelectedFolderId] = useState<string | null>(null);
   const [personalityDraft, setPersonalityDraft] = useState(customPersonalityNotes);
   const [personalitySaveStatus, setPersonalitySaveStatus] = useState<"idle" | "saved">("idle");
+  const [traitSliderValues, setTraitSliderValues] = useState<Record<PersonalityTraitId, number>>(() => {
+    const initial: Partial<Record<PersonalityTraitId, number>> = {};
+    for (const id of TRAIT_ORDER) {
+      const v = personalityTraits[id];
+      initial[id] = typeof v === "number" ? v : 50;
+    }
+    return initial as Record<PersonalityTraitId, number>;
+  });
   const pendingHandleRef = useRef<FileSystemDirectoryHandle | null>(null);
   const displayedVaultPath = nativeVaultPath?.trim() || (vaultHandle ? vaultHandle.name : vaultPath);
 
@@ -143,6 +161,17 @@ export default function SettingsView({
   useEffect(() => {
     setPersonalityDraft(customPersonalityNotes);
   }, [customPersonalityNotes]);
+
+  useEffect(() => {
+    setTraitSliderValues((prev) => {
+      const next = { ...prev };
+      for (const id of TRAIT_ORDER) {
+        const v = personalityTraits[id];
+        next[id] = typeof v === "number" ? v : 50;
+      }
+      return next;
+    });
+  }, [personalityTraits]);
 
   useEffect(() => {
     const detectBridge = () => {
@@ -714,8 +743,45 @@ export default function SettingsView({
         <section className="settings-section appearance-section personality-section">
           <h3>Personalidade</h3>
           <p className="settings-description">
-            Descreva o tom, características ou estilos que quiser (incluindo os que não estão nos traços
-            numéricos do chat). O texto é guardado neste dispositivo e aplicado às regras do assistente.
+            Os cinco traços (0–100) são os mesmos que pode ajustar no chat; alterações aqui gravam-se no
+            mesmo perfil. Valor médio na régua (50) significa traço ainda não definido — ao mover, o valor
+            passa a contar.
+          </p>
+          <div className="personality-traits-block" role="group" aria-label="Traços de personalidade">
+            {TRAIT_ORDER.map((id) => {
+              const meta = PERSONALITY_TRAIT_META[id];
+              const value = traitSliderValues[id];
+              return (
+                <div key={id} className="personality-trait-row">
+                  <div className="personality-trait-row-header">
+                    <label className="personality-trait-label" htmlFor={`personality-trait-${id}`}>
+                      {meta.labelPt}
+                    </label>
+                    <span className="personality-trait-value" aria-live="polite">
+                      {value}%
+                    </span>
+                  </div>
+                  <input
+                    id={`personality-trait-${id}`}
+                    className="personality-trait-range"
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={value}
+                    onChange={(event) => {
+                      const n = Number(event.target.value);
+                      if (!Number.isFinite(n)) return;
+                      const clamped = Math.max(0, Math.min(100, Math.round(n)));
+                      setTraitSliderValues((prev) => ({ ...prev, [id]: clamped }));
+                      onPersonalityTraitsPatch?.({ [id]: clamped });
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <p className="settings-description personality-free-text-intro">
+            Texto livre: tom e pormenores que não couberem só nos sliders (guardado neste dispositivo).
           </p>
           <textarea
             className="personality-free-text"
@@ -888,6 +954,54 @@ export default function SettingsView({
         .personality-free-text::placeholder {
           color: var(--muted);
           opacity: 0.75;
+        }
+
+        .personality-free-text-intro {
+          margin-top: 8px;
+        }
+
+        .personality-traits-block {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+          padding: 14px 0 6px;
+        }
+
+        .personality-trait-row {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .personality-trait-row-header {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 10px;
+        }
+
+        .personality-trait-label {
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          font-weight: 500;
+          color: var(--foreground);
+          margin: 0;
+        }
+
+        .personality-trait-value {
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          font-variant-numeric: tabular-nums;
+          color: var(--muted);
+          min-width: 2.5rem;
+          text-align: right;
+        }
+
+        .personality-trait-range {
+          width: 100%;
+          height: 6px;
+          accent-color: var(--foreground);
+          cursor: pointer;
         }
 
         .personality-free-text-footer {

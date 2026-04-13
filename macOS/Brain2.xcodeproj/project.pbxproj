@@ -402,6 +402,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "O Brain2 usa o microfone para animar o modelo Your Brain na conversa avançada.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "O Brain2 usa o reconhecimento de voz do sistema para transcrever a conversa avançada no ecrã.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -430,6 +431,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "O Brain2 usa o microfone para animar o modelo Your Brain na conversa avançada.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "O Brain2 usa o reconhecimento de voz do sistema para transcrever a conversa avançada no ecrã.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

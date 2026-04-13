@@ -1,14 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type UIEvent, type WheelEvent } from "react";
-import { Check, Copy, Volume2 } from "lucide-react";
+import { Check, Copy, ScrollText, Square, Volume2 } from "lucide-react";
 import type { ChatMessage } from "@/lib/chat";
+import {
+  cancelBrowserSpeech,
+  isBrowserSpeechSynthesisAvailable,
+  speakBrowserText,
+} from "@/lib/browserSpeechSynthesis";
 
 type ChatViewProps = {
   title: string;
   messages: ChatMessage[];
   loading: boolean;
   error: string | null;
+  /** Caminhos de notas usadas na última resposta — feedback ANCC. */
+  vaultFeedbackPaths?: string[];
+  onVaultMemoryFeedback?: (helpful: boolean) => void;
 };
 
 function roleLabel(role: ChatMessage["role"]): string {
@@ -17,10 +25,46 @@ function roleLabel(role: ChatMessage["role"]): string {
   return "Sistema";
 }
 
+type SpeechTarget =
+  | { kind: "reply"; messageId: string }
+  | { kind: "conversationThrough"; assistantMessageId: string };
+
+/** Texto legível para TTS a partir de Markdown simples. */
+function textForSpeech(markdown: string): string {
+  return markdown
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\[(.+?)\]\([^)]+\)/g, "$1")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
+/** Texto da conversa desde o início até à mensagem do assistente indicada (índice inclusivo). */
+function buildConversationSpeechText(messages: ChatMessage[], throughAssistantIndex: number): string {
+  const parts: string[] = [];
+  for (let i = 0; i <= throughAssistantIndex; i++) {
+    const msg = messages[i]!;
+    if (msg.role === "system") continue;
+    const t = textForSpeech(msg.content);
+    if (!t) continue;
+    parts.push(`${roleLabel(msg.role)}. ${t}`);
+  }
+  return parts.join("\n\n");
+}
+
 /** Pixels from the bottom to consider the user “following” the stream (auto-scroll). */
 const PIN_THRESHOLD_PX = 96;
 
-export default function ChatView({ title, messages, loading, error }: ChatViewProps) {
+export default function ChatView({
+  title,
+  messages,
+  loading,
+  error,
+  vaultFeedbackPaths = [],
+  onVaultMemoryFeedback,
+}: ChatViewProps) {
   const scrollRootRef = useRef<HTMLElement | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const followBottomRef = useRef(true);
@@ -31,14 +75,96 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
   const [typingText, setTypingText] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [speechTarget, setSpeechTarget] = useState<SpeechTarget | null>(null);
+  const [ttsAvailable, setTtsAvailable] = useState(false);
+
+  useEffect(() => {
+    queueMicrotask(() => setTtsAvailable(isBrowserSpeechSynthesisAvailable()));
+  }, []);
 
   useEffect(() => {
     return () => {
       if (copyTimeoutRef.current !== null) {
         window.clearTimeout(copyTimeoutRef.current);
       }
+      cancelBrowserSpeech();
     };
   }, []);
+
+  const speakOrStopAssistantMessage = useCallback((messageId: string, rawContent: string) => {
+    if (!ttsAvailable) {
+      return;
+    }
+    if (speechTarget?.kind === "reply" && speechTarget.messageId === messageId) {
+      cancelBrowserSpeech();
+      setSpeechTarget(null);
+      return;
+    }
+    const text = textForSpeech(rawContent);
+    if (!text) {
+      return;
+    }
+    cancelBrowserSpeech();
+    setSpeechTarget({ kind: "reply", messageId });
+    speakBrowserText(text, {
+      onEnd: () => {
+        setSpeechTarget((current) =>
+          current?.kind === "reply" && current.messageId === messageId ? null : current,
+        );
+      },
+      onError: () => {
+        setSpeechTarget((current) =>
+          current?.kind === "reply" && current.messageId === messageId ? null : current,
+        );
+      },
+    });
+  }, [ttsAvailable, speechTarget]);
+
+  const speakOrStopConversationThroughAssistant = useCallback(
+    (assistantMessageId: string) => {
+      if (!ttsAvailable) {
+        return;
+      }
+      if (
+        speechTarget?.kind === "conversationThrough" &&
+        speechTarget.assistantMessageId === assistantMessageId
+      ) {
+        cancelBrowserSpeech();
+        setSpeechTarget(null);
+        return;
+      }
+      const idx = messages.findIndex((m) => m.id === assistantMessageId);
+      if (idx < 0) {
+        return;
+      }
+      if (messages[idx]!.role !== "assistant") {
+        return;
+      }
+      const text = buildConversationSpeechText(messages, idx);
+      if (!text) {
+        return;
+      }
+      cancelBrowserSpeech();
+      setSpeechTarget({ kind: "conversationThrough", assistantMessageId });
+      speakBrowserText(text, {
+        onEnd: () => {
+          setSpeechTarget((current) =>
+            current?.kind === "conversationThrough" && current.assistantMessageId === assistantMessageId
+              ? null
+              : current,
+          );
+        },
+        onError: () => {
+          setSpeechTarget((current) =>
+            current?.kind === "conversationThrough" && current.assistantMessageId === assistantMessageId
+              ? null
+              : current,
+          );
+        },
+      });
+    },
+    [ttsAvailable, speechTarget, messages],
+  );
 
   const updateFollowFromScrollPosition = useCallback(() => {
     const root = scrollRootRef.current;
@@ -247,13 +373,71 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
                         {copiedMessageId === message.id ? <Check size={14} /> : <Copy size={14} />}
                       </button>
                       <button
-                        className="message-action-btn message-action-btn--disabled"
+                        className={`message-action-btn${
+                          speechTarget?.kind === "conversationThrough" &&
+                          speechTarget.assistantMessageId === message.id
+                            ? " message-action-btn--speaking"
+                            : ""
+                        }`}
                         type="button"
-                        aria-label="Ouvir resposta (em breve)"
-                        title="Ouvir resposta (em breve)"
-                        disabled
+                        aria-label={
+                          speechTarget?.kind === "conversationThrough" &&
+                          speechTarget.assistantMessageId === message.id
+                            ? "Parar leitura da conversa"
+                            : "Ler conversa até aqui"
+                        }
+                        title={
+                          ttsAvailable
+                            ? speechTarget?.kind === "conversationThrough" &&
+                              speechTarget.assistantMessageId === message.id
+                              ? "Parar leitura"
+                              : "Ler conversa em voz desde o início até esta resposta"
+                            : "Síntese de voz não disponível neste browser"
+                        }
+                        disabled={!ttsAvailable}
+                        aria-pressed={
+                          speechTarget?.kind === "conversationThrough" &&
+                          speechTarget.assistantMessageId === message.id
+                        }
+                        onClick={() => speakOrStopConversationThroughAssistant(message.id)}
                       >
-                        <Volume2 size={14} />
+                        {speechTarget?.kind === "conversationThrough" &&
+                        speechTarget.assistantMessageId === message.id ? (
+                          <Square size={12} strokeWidth={2.5} />
+                        ) : (
+                          <ScrollText size={14} />
+                        )}
+                      </button>
+                      <button
+                        className={`message-action-btn${
+                          speechTarget?.kind === "reply" && speechTarget.messageId === message.id
+                            ? " message-action-btn--speaking"
+                            : ""
+                        }`}
+                        type="button"
+                        aria-label={
+                          speechTarget?.kind === "reply" && speechTarget.messageId === message.id
+                            ? "Parar leitura"
+                            : "Ouvir resposta"
+                        }
+                        title={
+                          ttsAvailable
+                            ? speechTarget?.kind === "reply" && speechTarget.messageId === message.id
+                              ? "Parar leitura"
+                              : "Ouvir resposta em voz"
+                            : "Síntese de voz não disponível neste browser"
+                        }
+                        disabled={!ttsAvailable}
+                        aria-pressed={
+                          speechTarget?.kind === "reply" && speechTarget.messageId === message.id
+                        }
+                        onClick={() => speakOrStopAssistantMessage(message.id, message.content)}
+                      >
+                        {speechTarget?.kind === "reply" && speechTarget.messageId === message.id ? (
+                          <Square size={12} strokeWidth={2.5} />
+                        ) : (
+                          <Volume2 size={14} />
+                        )}
                       </button>
                     </div>
                   )}
@@ -283,6 +467,20 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
         </div>
       </section>
 
+      {vaultFeedbackPaths.length > 0 && onVaultMemoryFeedback && !loading ? (
+        <div className="chat-vault-feedback" role="group" aria-label="Feedback sobre memória do vault">
+          <span className="chat-vault-feedback-label">As notas do vault ajudaram nesta resposta?</span>
+          <div className="chat-vault-feedback-actions">
+            <button type="button" className="chat-vault-feedback-btn" onClick={() => onVaultMemoryFeedback(true)}>
+              Sim
+            </button>
+            <button type="button" className="chat-vault-feedback-btn chat-vault-feedback-btn--muted" onClick={() => onVaultMemoryFeedback(false)}>
+              Não
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <style jsx>{`
         .chat-root {
           width: 100%;
@@ -310,6 +508,48 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
           font-size: 15px;
           font-weight: 500;
           color: var(--foreground);
+        }
+
+        .chat-vault-feedback {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 10px 20px 14px;
+          border-top: 1px solid var(--bar-border, rgba(255, 255, 255, 0.08));
+          background: rgba(0, 0, 0, 0.15);
+        }
+
+        .chat-vault-feedback-label {
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          color: var(--muted, #888);
+        }
+
+        .chat-vault-feedback-actions {
+          display: flex;
+          gap: 8px;
+        }
+
+        .chat-vault-feedback-btn {
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+          font-weight: 500;
+          padding: 6px 14px;
+          border-radius: 8px;
+          border: 1px solid var(--bar-border, rgba(255, 255, 255, 0.12));
+          background: var(--pill-active, rgba(255, 255, 255, 0.06));
+          color: var(--foreground, #e8e8e8);
+          cursor: pointer;
+        }
+
+        .chat-vault-feedback-btn:hover {
+          opacity: 0.92;
+        }
+
+        .chat-vault-feedback-btn--muted {
+          opacity: 0.75;
         }
 
         .chat-title-wrap p {
@@ -435,6 +675,17 @@ export default function ChatView({ title, messages, loading, error }: ChatViewPr
           background: rgba(0, 0, 0, 0.04);
           border-color: rgba(0, 0, 0, 0.08);
           color: #3e3e3e;
+        }
+
+        .message-action-btn--speaking {
+          color: #2a6ea8;
+          border-color: rgba(42, 110, 168, 0.35);
+          background: rgba(42, 110, 168, 0.1);
+        }
+
+        .message-action-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
         }
 
         .message-action-btn--disabled,

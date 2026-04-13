@@ -35,23 +35,51 @@ export type LiveTranscriptionHandlers = {
   onError?: (message: string) => void;
 };
 
-/** Erros que o WebKit dispara durante reinícios ou pausas — não são falhas para o utilizador. */
+/** Erros que o WebKit / Chrome disparam durante reinícios, partilha de microfone ou pausas. */
 function isBenignSpeechRecognitionError(code: string): boolean {
+  const c = String(code).trim().toLowerCase();
   return (
-    code === "aborted" ||
-    code === "no-speech" ||
-    /** macOS / iOS WebKit: sessão de áudio ou reconhecimento interrompido; o onend reinicia. */
-    code === "interrupted" ||
+    c === "aborted" ||
+    c === "no-speech" ||
+    /** macOS / iOS WebKit: sessão interrompida; o `onend` reinicia. */
+    c === "interrupted" ||
     /** Transiente (rede / serviço Apple / Google). */
-    code === "network"
+    c === "network" ||
+    /** Comum no macOS quando o microfone está em uso (ex.: Web Audio + STT) ou a libertar. */
+    c === "audio-capture" ||
+    /** Alguns motores (p. ex. Safari) em silêncio ou rejeição de hipótese. */
+    c === "no-match" ||
+    /** WebKit: serviço de reconhecimento temporariamente indisponível. */
+    c === "service-not-allowed" ||
+    /** Gramática opcional inválida — ignorar. */
+    c === "bad-grammar" ||
+    /** Tentativa seguinte com outro `lang` no nível da app; aqui não é falha terminal. */
+    c === "language-not-supported"
   );
 }
 
-function shouldUseWebKitStableMode(): boolean {
+function isLikelyEmbeddedWebKit(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const wk = (window as Window & { webkit?: { messageHandlers?: unknown } }).webkit;
+  if (wk?.messageHandlers != null) {
+    return true;
+  }
+  if (typeof navigator !== "undefined" && /WKWebView|Brain2|brain2/i.test(navigator.userAgent)) {
+    return true;
+  }
+  return false;
+}
+
+export function shouldUseWebKitStableMode(): boolean {
   if (typeof document === "undefined") {
     return false;
   }
   if (document.documentElement.hasAttribute("data-brain2-native")) {
+    return true;
+  }
+  if (isLikelyEmbeddedWebKit()) {
     return true;
   }
   if (typeof navigator === "undefined") {
@@ -61,6 +89,18 @@ function shouldUseWebKitStableMode(): boolean {
   return /AppleWebKit/.test(ua) && !/Chrome\/|Chromium\/|Edg\//.test(ua);
 }
 
+/** Atraso e modo frase-a-frase recomendados (WKWebView / Safari / app nativa). */
+export function getDefaultLiveTranscriptionTiming(): {
+  webkitStableMode: boolean;
+  startDelayMs: number;
+} {
+  const stable = shouldUseWebKitStableMode();
+  return {
+    webkitStableMode: stable,
+    startDelayMs: stable ? 520 : 0,
+  };
+}
+
 export type StartLiveTranscriptionOptions = {
   lang?: string;
   /**
@@ -68,6 +108,10 @@ export type StartLiveTranscriptionOptions = {
    * Por defeito activa em app nativa (data-brain2-native) ou Safari clássico.
    */
   webkitStableMode?: boolean;
+  /**
+   * Atraso antes do primeiro `rec.start()` — reduz corrida com getUserMedia / AudioContext no WKWebView (macOS).
+   */
+  startDelayMs?: number;
 };
 
 /**
@@ -93,8 +137,10 @@ export function startLiveTranscription(
 
   let stopped = false;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
+  let initialStartTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const restartDelayMs = webkitStable ? 240 : 60;
+  const restartDelayMs = webkitStable ? 280 : 60;
+  const startDelayMs = Math.max(0, options?.startDelayMs ?? (webkitStable ? 520 : 0));
 
   const restart = () => {
     if (stopped) {
@@ -135,14 +181,15 @@ export function startLiveTranscription(
   };
 
   rec.onerror = (event: { error: string }) => {
-    if (isBenignSpeechRecognitionError(event.error)) {
+    const err = String(event.error ?? "");
+    if (isBenignSpeechRecognitionError(err)) {
       return;
     }
-    if (event.error === "not-allowed") {
+    if (err === "not-allowed") {
       handlers.onError?.("denied");
       return;
     }
-    handlers.onError?.(event.error);
+    handlers.onError?.(err);
   };
 
   rec.onend = () => {
@@ -158,14 +205,38 @@ export function startLiveTranscription(
     }, restartDelayMs);
   };
 
-  try {
-    rec.start();
-  } catch {
-    handlers.onError?.("start-failed");
+  const doInitialStart = () => {
+    if (stopped) {
+      return;
+    }
+    try {
+      rec.start();
+    } catch {
+      /** WebKit: `start` falha se a sessão anterior ainda não libertou — não mostrar erro; `onend` ou timer reinicia. */
+      if (!stopped) {
+        restartTimer = setTimeout(() => {
+          restartTimer = null;
+          restart();
+        }, webkitStable ? 380 : 140);
+      }
+    }
+  };
+
+  if (startDelayMs > 0) {
+    initialStartTimer = setTimeout(() => {
+      initialStartTimer = null;
+      doInitialStart();
+    }, startDelayMs);
+  } else {
+    doInitialStart();
   }
 
   return () => {
     stopped = true;
+    if (initialStartTimer !== null) {
+      clearTimeout(initialStartTimer);
+      initialStartTimer = null;
+    }
     if (restartTimer !== null) {
       clearTimeout(restartTimer);
       restartTimer = null;

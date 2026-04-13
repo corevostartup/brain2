@@ -35,7 +35,7 @@ export function normalizeCustomPersonality(raw: string | undefined | null): stri
   return t.slice(0, MAX_CUSTOM_PERSONALITY_CHARS);
 }
 
-const TRAIT_ORDER: PersonalityTraitId[] = [
+export const TRAIT_ORDER: PersonalityTraitId[] = [
   "sarcasm",
   "humor",
   "creativity",
@@ -120,7 +120,7 @@ export function saveUserPersonalityProfile(profile: UserPersonalityProfile): voi
   }
 }
 
-function mergeTraitPatchIntoProfile(
+export function mergeTraitPatchIntoProfile(
   previous: UserPersonalityProfile,
   patch: Partial<Record<PersonalityTraitId, number>>,
 ): UserPersonalityProfile {
@@ -507,7 +507,7 @@ export function buildUserPersonalitySystemAddition(profile: UserPersonalityProfi
       "For slider traits: if they ask for a specific percentage, use the numbers above. If a slider trait was never set, say it is not customized (balanced default).",
     );
     lines.push(
-      "They may update slider traits anytime in chat; the app persists interpreted 0–100 values.",
+      "They may update slider traits anytime in chat or in Settings; the app persists interpreted 0–100 values.",
     );
     lines.push(
       "If they describe mood without numbers for a slider trait, the saved numbers above are the app's interpretation—do not contradict them unless blending with free-text notes below.",

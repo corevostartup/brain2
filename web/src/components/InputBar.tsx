@@ -5,11 +5,18 @@ import { flushSync } from "react-dom";
 import {
   Plus,
   Mic,
+  MicOff,
   ArrowUp,
   Key,
   ChevronDown,
   BrainCircuit,
 } from "lucide-react";
+import { loadLlmConfig, type LlmClientConfig } from "@/lib/llmClientConfig";
+import {
+  getSpeechRecognitionConstructor,
+  getDefaultLiveTranscriptionTiming,
+  startLiveTranscription,
+} from "@/lib/browserSpeechRecognition";
 
 type Mode = "Ask" | "Agent";
 type ContextMode = "Local" | "API";
@@ -29,59 +36,19 @@ type NativeBridge = {
   clearLlmConfig?: () => void;
 };
 
-type LlmConfig = {
-  model: string;
-  apiKey: string;
-};
-
-function loadLlmConfig(): LlmConfig | null {
-  if (typeof window === "undefined") return null;
-
-  const modelStored = localStorage.getItem(LLM_MODEL_STORAGE_KEY)?.trim() ?? "";
-  const apiKeyStored = localStorage.getItem(LLM_API_KEY_STORAGE_KEY)?.trim() ?? "";
-  if (apiKeyStored) {
-    return {
-      model: modelStored || "gpt-5.4-mini",
-      apiKey: apiKeyStored,
-    };
-  }
-
-  try {
-    const raw = localStorage.getItem(LLM_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<LlmConfig>;
-      const parsedApiKey = parsed.apiKey?.trim() ?? "";
-      const parsedModel = parsed.model?.trim() ?? "";
-      if (parsedApiKey) {
-        return {
-          model: parsedModel || "gpt-5.4-mini",
-          apiKey: parsedApiKey,
-        };
-      }
-    }
-  } catch {
-    // ignore malformed localStorage object
-  }
-
-  const nativeConfig = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native?.llmConfig;
-  const nativeApiKey = nativeConfig?.apiKey?.trim() ?? "";
-  const nativeModel = nativeConfig?.model?.trim() ?? "";
-  if (nativeApiKey) {
-    return {
-      model: nativeModel || "gpt-5.4-mini",
-      apiKey: nativeApiKey,
-    };
-  }
-
-  return null;
-}
-
 function maskApiKey(key: string): string {
   if (!key) return "não configurada";
   if (key.length <= 8) {
     return `${key.slice(0, 2)}****`;
   }
   return `${key.slice(0, 4)}••••${key.slice(-4)}`;
+}
+
+function isBrain2NativeShell(): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  return document.documentElement.hasAttribute("data-brain2-native");
 }
 
 type InputBarProps = {
@@ -106,9 +73,26 @@ export default function InputBar({
   const [draftModel, setDraftModel] = useState("gpt-5.4-mini");
   const [draftApiKey, setDraftApiKey] = useState("");
   const [llmStatus, setLlmStatus] = useState<"idle" | "error" | "saved">("idle");
+  const [isDictating, setIsDictating] = useState(false);
+  const [sttError, setSttError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const valueRef = useRef("");
+  const stopDictationRef = useRef<(() => void) | null>(null);
+  const dictationPrefixRef = useRef("");
 
   const hasConfiguredApiKey = llmApiKey.trim().length > 0;
+
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+
+  const stopDictation = useCallback(() => {
+    if (stopDictationRef.current) {
+      stopDictationRef.current();
+      stopDictationRef.current = null;
+    }
+    setIsDictating(false);
+  }, []);
 
   useEffect(() => {
     if (!isLlmConfigOpen) return;
@@ -147,6 +131,64 @@ export default function InputBar({
     el.style.height = Math.min(el.scrollHeight, 180) + "px";
   }, []);
 
+  const toggleDictation = useCallback(() => {
+    if (stopDictationRef.current) {
+      stopDictation();
+      setSttError(null);
+      return;
+    }
+    if (!getSpeechRecognitionConstructor()) {
+      setSttError("Reconhecimento de voz indisponível neste browser. Use Chrome ou Safari recente.");
+      return;
+    }
+    setSttError(null);
+    dictationPrefixRef.current = valueRef.current;
+    const timing = getDefaultLiveTranscriptionTiming();
+    const stop = startLiveTranscription(
+      {
+        onText: (text) => {
+          const spoken = text.trim();
+          const prefix = dictationPrefixRef.current;
+          const join = prefix && spoken ? (/\s$/.test(prefix) ? "" : " ") : "";
+          setValue(prefix + join + spoken);
+          queueMicrotask(() => autoResize());
+        },
+        onError: (code) => {
+          if (code === "denied") {
+            setSttError("Permissão de microfone ou voz recusada.");
+          } else if (code === "unsupported") {
+            setSttError("Reconhecimento de voz não suportado.");
+          } else if (!isBrain2NativeShell()) {
+            setSttError("Reconhecimento interrompido. Tente de novo.");
+          }
+          stopDictation();
+        },
+      },
+      {
+        lang: "pt-BR",
+        webkitStableMode: timing.webkitStableMode,
+        startDelayMs: isBrain2NativeShell() ? Math.max(timing.startDelayMs, 680) : timing.startDelayMs,
+      },
+    );
+    stopDictationRef.current = stop;
+    setIsDictating(true);
+  }, [stopDictation, autoResize]);
+
+  useEffect(() => {
+    return () => {
+      if (stopDictationRef.current) {
+        stopDictationRef.current();
+        stopDictationRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isSending) {
+      stopDictation();
+    }
+  }, [isSending, stopDictation]);
+
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value);
     autoResize();
@@ -161,6 +203,8 @@ export default function InputBar({
 
   const handleSubmit = async () => {
     if (isSending) return;
+    stopDictation();
+    setSttError(null);
     const trimmed = value.trim();
     if (!trimmed) return;
 
@@ -180,11 +224,15 @@ export default function InputBar({
     autoResize();
 
     if (onSend) {
-      await onSend({
-        content: trimmed,
-        model,
-        apiKey,
-      });
+      try {
+        await onSend({
+          content: trimmed,
+          model,
+          apiKey,
+        });
+      } catch {
+        /* Erro já reflectido em setChatError dentro de handleSendToBrain */
+      }
     }
   };
 
@@ -203,7 +251,7 @@ export default function InputBar({
       return;
     }
 
-    const nextConfig: LlmConfig = {
+    const nextConfig: LlmClientConfig = {
       model: nextModel,
       apiKey: nextApiKey,
     };
@@ -288,7 +336,7 @@ export default function InputBar({
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder="Pergunte ao Brain2…"
+            placeholder={isDictating ? "À escuta… fale para transcrever." : "Pergunte ao Brain2…"}
             rows={1}
             spellCheck={false}
             aria-label="Mensagem"
@@ -314,16 +362,27 @@ export default function InputBar({
               <Key size={14} strokeWidth={1.8} />
             </button>
 
-            <button className="icon-btn" aria-label="Entrada de voz">
-              <Mic size={15} strokeWidth={1.8} />
+            <button
+              className={`icon-btn${isDictating ? " icon-btn--dictating" : ""}`}
+              type="button"
+              aria-label={isDictating ? "Parar ditado por voz" : "Falar para transcrever"}
+              aria-pressed={isDictating}
+              title={isDictating ? "Parar microfone" : "Falar — transcreve no campo de texto"}
+              onClick={() => toggleDictation()}
+            >
+              {isDictating ? <MicOff size={15} strokeWidth={1.8} /> : <Mic size={15} strokeWidth={1.8} />}
             </button>
 
             <button
               className="icon-btn voice-advanced-btn"
-              aria-label="Fala avancada"
-              title="Fala avancada (em breve)"
+              aria-label="Conversa avançada com voz"
+              title="Conversa avançada (voz + cérebro)"
               type="button"
-              onClick={onOpenAdvancedVoice}
+              onClick={() => {
+                stopDictation();
+                setSttError(null);
+                onOpenAdvancedVoice?.();
+              }}
             >
               <span className="voice-bars" aria-hidden="true">
                 <span />
@@ -345,6 +404,12 @@ export default function InputBar({
             </button>
           </div>
         </div>
+
+        {sttError ? (
+          <p className="input-bar-stt-error" role="alert">
+            {sttError}
+          </p>
+        ) : null}
       </div>
       </div>
 
@@ -561,6 +626,28 @@ export default function InputBar({
         .icon-btn--configured:hover {
           color: #61d79b;
           background: rgba(72, 191, 132, 0.12);
+        }
+
+        .icon-btn--dictating {
+          color: #4a9eff;
+          background: rgba(74, 158, 255, 0.12);
+        }
+
+        .icon-btn--dictating:hover {
+          background: rgba(74, 158, 255, 0.18);
+        }
+
+        .input-bar-stt-error {
+          margin: 0;
+          padding: 6px 14px 10px;
+          font-size: 12px;
+          line-height: 1.35;
+          color: #c45a5a;
+        }
+
+        :global(html[data-theme="light"]) .input-bar-stt-error,
+        :global(body[data-theme="light"]) .input-bar-stt-error {
+          color: #b04040;
         }
 
         .voice-advanced-btn {

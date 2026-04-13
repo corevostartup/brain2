@@ -77,13 +77,17 @@ import {
   applyPersonalityUpdatesFromUserMessage,
   buildUserPersonalitySystemAddition,
   loadUserPersonalityProfile,
+  mergeTraitPatchIntoProfile,
   normalizeCustomPersonality,
   saveUserPersonalityProfile,
+  type PersonalityTraitId,
   type UserPersonalityProfile,
 } from "@/lib/userPersonalityProfile";
 import { buildVaultSnapshotsForAncc } from "@/lib/anccVaultSnapshots";
+import { loadVaultPathFeedbackMap, recordVaultPathFeedback } from "@/lib/anccVaultFeedbackStorage";
 import { buildAnccRecentBullets } from "@/lib/anccRecentContext";
 import { appendRollingSessionSummary } from "@/lib/anccRollingSummary";
+import { loadLlmConfig } from "@/lib/llmClientConfig";
 import {
   appendRecentMemoryAfterTurn,
   getRecentMemoryQueryText,
@@ -421,8 +425,12 @@ export default function Home() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   /** Estado ANCC (plasticidade + recorrência) por sessão de chat no browser. */
   const anccSessionRef = useRef(createDefaultANCCSession());
+  /** Entidades (nomes próprios) canónicas por sessão ANCC. */
+  const anccEntityMapRef = useRef<Record<string, string>>({});
   /** Resumo rolante da conversa (query enriquecida para retrieval híbrido). */
   const anccRollingSummaryRef = useRef("");
+  /** Pedir feedback sobre uso do vault na última resposta. */
+  const [vaultFeedbackPaths, setVaultFeedbackPaths] = useState<string[]>([]);
   /**
    * Evita duplicar conversas no vault: com `chatSessionId` ainda null, dois envios rápidos
    * geravam dois `sessionId`/`startedAt` antes do setState — dois ficheiros para a mesma conversa.
@@ -1024,8 +1032,10 @@ export default function Home() {
     setChatSessionFolderPath(null);
     setIsChatOpen(true);
     anccSessionRef.current = createDefaultANCCSession();
+    anccEntityMapRef.current = {};
     anccRollingSummaryRef.current = "";
     newChatSessionLockRef.current = null;
+    setVaultFeedbackPaths([]);
   }, []);
 
   const handleCreateFolder = useCallback(async (parentPath: string, folderName: string) => {
@@ -1284,7 +1294,9 @@ export default function Home() {
 
     newChatSessionLockRef.current = null;
     anccSessionRef.current = createDefaultANCCSession();
+    anccEntityMapRef.current = {};
     anccRollingSummaryRef.current = "";
+    setVaultFeedbackPaths([]);
   }, []);
 
   const handleOpenConversationFromNode = useCallback((nodeId: string, nodeLabel: string) => {
@@ -1331,7 +1343,9 @@ export default function Home() {
     setChatSessionFolderPath(null);
     newChatSessionLockRef.current = null;
     anccSessionRef.current = createDefaultANCCSession();
+    anccEntityMapRef.current = {};
     anccRollingSummaryRef.current = "";
+    setVaultFeedbackPaths([]);
     if (returnToYourBrainOnConversationClose) {
       setIsYourBrainOpen(true);
     }
@@ -1347,6 +1361,14 @@ export default function Home() {
       } else {
         delete next.customPersonality;
       }
+      saveUserPersonalityProfile(next);
+      return next;
+    });
+  }, []);
+
+  const handlePersonalityTraitsPatch = useCallback((patch: Partial<Record<PersonalityTraitId, number>>) => {
+    setUserPersonalityProfile((prev) => {
+      const next = mergeTraitPatchIntoProfile(prev, patch);
       saveUserPersonalityProfile(next);
       return next;
     });
@@ -1430,71 +1452,99 @@ export default function Home() {
     });
   }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData]);
 
-  const handleSendToBrain = useCallback(async (payload: { content: string; model: string; apiKey: string }) => {
-    setIsChatOpen(true);
-    if (selectedConversationId) {
-      setVaultConversationLiveChat(true);
-    }
-    const targetFolderPathForConversation = normalizeFolderPath(chatSessionFolderPath ?? selectedFolderPath);
-    let sessionId: string;
-    let startedAt: number;
-    if (chatSessionId != null) {
-      sessionId = chatSessionId;
-      startedAt =
-        chatSessionStartedAt ??
-        newChatSessionLockRef.current?.startedAt ??
-        Date.now();
-    } else {
-      if (!newChatSessionLockRef.current) {
+  const handleSendToBrain = useCallback(
+    async (payload: {
+      content: string;
+      model: string;
+      apiKey: string;
+      /** Conversa avançada: inicia sessão ANCC/histórico nova sem depender do estado React assíncrono. */
+      startFreshConversation?: boolean;
+    }) => {
+      setIsChatOpen(true);
+      const baseHistory: ChatMessage[] = payload.startFreshConversation ? [] : chatMessages;
+
+      if (payload.startFreshConversation) {
+        setSelectedConversationId(null);
+        setVaultConversationLiveChat(false);
+      } else if (selectedConversationId) {
+        setVaultConversationLiveChat(true);
+      }
+
+      const targetFolderPathForConversation = normalizeFolderPath(chatSessionFolderPath ?? selectedFolderPath);
+      let sessionId: string;
+      let startedAt: number;
+
+      if (payload.startFreshConversation) {
         newChatSessionLockRef.current = {
           sessionId: createConversationRecordId(createMessageId()),
           startedAt: Date.now(),
         };
+        sessionId = newChatSessionLockRef.current.sessionId;
+        startedAt = newChatSessionLockRef.current.startedAt;
+        setChatSessionId(sessionId);
+        setChatSessionStartedAt(startedAt);
+        setChatSessionFolderPath(targetFolderPathForConversation);
+        anccSessionRef.current = createDefaultANCCSession();
+        anccEntityMapRef.current = {};
+        anccRollingSummaryRef.current = "";
+      } else if (chatSessionId != null) {
+        sessionId = chatSessionId;
+        startedAt =
+          chatSessionStartedAt ??
+          newChatSessionLockRef.current?.startedAt ??
+          Date.now();
+      } else {
+        if (!newChatSessionLockRef.current) {
+          newChatSessionLockRef.current = {
+            sessionId: createConversationRecordId(createMessageId()),
+            startedAt: Date.now(),
+          };
+        }
+        sessionId = newChatSessionLockRef.current.sessionId;
+        startedAt = newChatSessionLockRef.current.startedAt;
+        setChatSessionId(sessionId);
+        setChatSessionStartedAt(startedAt);
+        setChatSessionFolderPath(targetFolderPathForConversation);
       }
-      sessionId = newChatSessionLockRef.current.sessionId;
-      startedAt = newChatSessionLockRef.current.startedAt;
-      setChatSessionId(sessionId);
-      setChatSessionStartedAt(startedAt);
-      setChatSessionFolderPath(targetFolderPathForConversation);
-    }
 
-    const userMessage: ChatMessage = {
-      id: createMessageId(),
-      role: "user",
-      content: payload.content,
-      createdAt: Date.now(),
-    };
+      const userMessage: ChatMessage = {
+        id: createMessageId(),
+        role: "user",
+        content: payload.content,
+        createdAt: Date.now(),
+      };
 
-    let displayNameForTurn = userAssistantDisplayName;
-    const parsedAssistantName = tryParseAssistantRenameFromUserMessage(payload.content);
-    if (parsedAssistantName) {
-      saveUserAssistantDisplayName(parsedAssistantName);
-      displayNameForTurn = parsedAssistantName;
-      setUserAssistantDisplayName(parsedAssistantName);
-    }
+      const requestMessages: ChatMessage[] = [...baseHistory, userMessage];
+      setChatMessages(requestMessages);
 
-    let personalityForTurn = userPersonalityProfile;
-    const { next: nextPersonality, changed: personalityChanged } = applyPersonalityUpdatesFromUserMessage(
-      payload.content,
-      userPersonalityProfile,
-    );
-    if (personalityChanged) {
-      saveUserPersonalityProfile(nextPersonality);
-      personalityForTurn = nextPersonality;
-      setUserPersonalityProfile(nextPersonality);
-    }
+      let displayNameForTurn = userAssistantDisplayName;
+      const parsedAssistantName = tryParseAssistantRenameFromUserMessage(payload.content);
+      if (parsedAssistantName) {
+        saveUserAssistantDisplayName(parsedAssistantName);
+        displayNameForTurn = parsedAssistantName;
+        setUserAssistantDisplayName(parsedAssistantName);
+      }
 
-    const requestMessages: ChatMessage[] = [...chatMessages, userMessage];
-    setChatMessages(requestMessages);
+      let personalityForTurn = userPersonalityProfile;
+      const { next: nextPersonality, changed: personalityChanged } = applyPersonalityUpdatesFromUserMessage(
+        payload.content,
+        userPersonalityProfile,
+      );
+      if (personalityChanged) {
+        saveUserPersonalityProfile(nextPersonality);
+        personalityForTurn = nextPersonality;
+        setUserPersonalityProfile(nextPersonality);
+      }
 
-    setChatError(null);
-    setIsSettingsOpen(false);
-    setIsYourBrainOpen(false);
-    setChatLoading(true);
+      setChatError(null);
+      setIsSettingsOpen(false);
+      setIsYourBrainOpen(false);
+      setChatLoading(true);
+      setVaultFeedbackPaths([]);
 
-    let anccForPersist: ANCCProcessResult | null = null;
+      let anccForPersist: ANCCProcessResult | null = null;
 
-    try {
+      try {
       const vaultFiles = buildVaultSnapshotsForAncc(vaultConversations);
       const crossSessionMemory = getRecentMemoryQueryText();
       let precomputedVaultHits: VaultCorrelationHit[] | undefined;
@@ -1536,8 +1586,13 @@ export default function Home() {
         precomputedVaultHits,
         userAssistantDisplayName: displayNameForTurn,
         userPersonalityProfile: personalityForTurn,
+        sessionEntityMap: anccEntityMapRef.current,
+        pathFeedback: loadVaultPathFeedbackMap(),
       });
       anccForPersist = anccResult;
+      if (anccResult.sessionEntityCanonicalMap) {
+        anccEntityMapRef.current = anccResult.sessionEntityCanonicalMap;
+      }
 
       const identityAddition = buildUserAssistantIdentitySystemAddition(displayNameForTurn);
       const personalityAddition = buildUserPersonalitySystemAddition(personalityForTurn);
@@ -1549,7 +1604,7 @@ export default function Home() {
       ]
         .filter((block) => block.trim().length > 0)
         .join("\n\n");
-      const priorForApi = chatMessages.filter((m) => m.role !== "system");
+      const priorForApi = baseHistory.filter((m) => m.role !== "system");
       const apiMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
         { role: "system", content: systemContent },
         ...priorForApi.map((message) => ({
@@ -1610,6 +1665,15 @@ export default function Home() {
           createdAt: Date.now(),
         },
       ];
+      const feedbackKeys = [
+        ...new Set([
+          ...anccResult.assembled.vaultCorrelationsPersisted.map((h) => h.path),
+          ...anccResult.assembled.vaultCorrelations.map((h) => h.path),
+        ]),
+      ].slice(0, 14);
+      if (feedbackKeys.length > 0) {
+        setVaultFeedbackPaths(feedbackKeys);
+      }
       setChatMessages(nextMessages);
       persistChatConversation({
         sessionId,
@@ -1632,6 +1696,7 @@ export default function Home() {
         folderPath: targetFolderPathForConversation,
         anccResult: anccForPersist,
       });
+      throw error instanceof Error ? error : new Error(message);
     } finally {
       setChatLoading(false);
     }
@@ -1649,6 +1714,43 @@ export default function Home() {
     vaultConversations,
   ]);
 
+  const lastAssistantReply = useMemo(() => {
+    for (let i = chatMessages.length - 1; i >= 0; i -= 1) {
+      const m = chatMessages[i];
+      if (m?.role === "assistant") {
+        return m.content;
+      }
+    }
+    return null;
+  }, [chatMessages]);
+
+  const assistantReplyEpoch = useMemo(
+    () => chatMessages.filter((m) => m.role === "assistant").length,
+    [chatMessages],
+  );
+
+  const handleAdvancedVoiceSubmit = useCallback(
+    async (opts: { text: string }) => {
+      const trimmed = opts.text.trim();
+      if (!trimmed) {
+        return;
+      }
+      const cfg = loadLlmConfig();
+      if (!cfg?.apiKey?.trim()) {
+        throw new Error("Configura a chave API na barra inferior (ícone da chave).");
+      }
+      /** Com histórico no chat, continua; em “nova conversa” (lista vazia), inicia sessão ANCC/histórico novos. */
+      const startFreshConversation = chatMessages.length === 0;
+      await handleSendToBrain({
+        content: trimmed,
+        model: cfg.model,
+        apiKey: cfg.apiKey,
+        startFreshConversation,
+      });
+    },
+    [chatMessages.length, handleSendToBrain],
+  );
+
   const handleNewConversation = useCallback(() => {
     setIsSettingsOpen(false);
     setIsYourBrainOpen(false);
@@ -1664,9 +1766,18 @@ export default function Home() {
     setChatSessionFolderPath(null);
     setIsChatOpen(true);
     anccSessionRef.current = createDefaultANCCSession();
+    anccEntityMapRef.current = {};
     anccRollingSummaryRef.current = "";
     newChatSessionLockRef.current = null;
+    setVaultFeedbackPaths([]);
   }, []);
+
+  const handleVaultMemoryFeedback = useCallback((helpful: boolean) => {
+    for (const p of vaultFeedbackPaths) {
+      recordVaultPathFeedback(p, helpful);
+    }
+    setVaultFeedbackPaths([]);
+  }, [vaultFeedbackPaths]);
 
   const handleLogin = useCallback(async () => {
     const configError = getFirebaseConfigError();
@@ -1930,12 +2041,19 @@ export default function Home() {
             messages={chatMessages}
             loading={chatLoading}
             error={chatError}
+            vaultFeedbackPaths={vaultFeedbackPaths}
+            onVaultMemoryFeedback={handleVaultMemoryFeedback}
           />
         ) : activeView === "advanced-voice" ? (
           <AdvancedVoiceSphereView
             onClose={() => setIsAdvancedVoiceOpen(false)}
             vaultGraph={vaultGraph}
             vaultGraphLoading={graphLoading}
+            onSubmitTranscript={handleAdvancedVoiceSubmit}
+            isLlmLoading={chatLoading}
+            lastAssistantText={lastAssistantReply}
+            assistantReplyEpoch={assistantReplyEpoch}
+            llmError={chatError}
           />
         ) : activeView === "conversation" && selectedConversation ? (
           <ConversationView
@@ -1954,6 +2072,8 @@ export default function Home() {
             onForceOnboarding={handleForceOnboarding}
             customPersonalityNotes={userPersonalityProfile.customPersonality ?? ""}
             onSaveCustomPersonalityNotes={handleSaveCustomPersonalityNotes}
+            personalityTraits={userPersonalityProfile.traits}
+            onPersonalityTraitsPatch={handlePersonalityTraitsPatch}
           />
         ) : (
           <>

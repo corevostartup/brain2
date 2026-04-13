@@ -73,5 +73,13 @@ export {
 export { adjustNoteLinks } from "@/ancc/pipeline/update-links";
 export { buildSystemContextBlock } from "@/ancc/pipeline/build-system-context";
 export { HYBRID_RETRIEVAL, hybridRetrieveVaultCorrelationHits } from "@/ancc/pipeline/hybrid-vault-retrieval";
+export { detectRetrievalIntent, type RetrievalIntent } from "@/ancc/pipeline/retrieval-intent";
+export { mergeMessageEntities, entityOverlapScore } from "@/ancc/pipeline/stable-entities";
+export {
+  buildVaultTitleToPath,
+  buildOutgoingWikiNeighbors,
+  expandHitsWithWikiGraph,
+} from "@/ancc/pipeline/vault-graph-expand";
+export { enrichVaultCorrelationHits } from "@/ancc/pipeline/enrich-vault-retrieval";
 export { splitVaultBodyIntoRetrievalChunks } from "@/ancc/pipeline/brain-vault-chunks";
 export type { HybridRetrievalEmbedder, HybridVaultRetrieveResult } from "@/ancc/pipeline/hybrid-vault-retrieval";

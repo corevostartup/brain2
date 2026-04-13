@@ -12,6 +12,12 @@ export type VaultCorrelationHit = {
   /** Similaridade cosseno query↔melhor chunk (recuperação híbrida). */
   semanticSimilarity?: number;
   retrievalMode?: "hybrid" | "lexical";
+  /** Incluída por expansão [[wikilink]] a partir de outra nota. */
+  graphExpanded?: boolean;
+  /** Score intermédio após re-ranking (entidades + grafo + feedback). */
+  rerankScore?: number;
+  /** Relevância já ajustada por intenção (recall/store/converse). */
+  intentAdjusted?: boolean;
 };
 
 export type AssembledContext = {
@@ -54,4 +60,6 @@ export type ANCCProcessResult = {
   outcomeSignals?: string[];
   /** Tópicos extraídos da resposta do assistente (eixo pós-diálogo). */
   assistantTopicsAfterResponse?: string[];
+  /** Mapa entidade(lower)→forma canónica para o próximo turno. */
+  sessionEntityCanonicalMap?: Record<string, string>;
 };

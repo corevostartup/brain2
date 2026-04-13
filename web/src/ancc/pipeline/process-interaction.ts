@@ -27,6 +27,9 @@ import {
 } from "@/ancc/pipeline/explicit-correlation-command";
 import { CORRELATION } from "@/ancc/rules/correlation.rules";
 import { newInteractionId } from "@/ancc/models/metadata";
+import { detectRetrievalIntent } from "@/ancc/pipeline/retrieval-intent";
+import { mergeMessageEntities } from "@/ancc/pipeline/stable-entities";
+import { enrichVaultCorrelationHits } from "@/ancc/pipeline/enrich-vault-retrieval";
 
 export type TopicRecurrenceTracker = {
   counts: Map<string, number>;
@@ -67,21 +70,27 @@ export type ProcessInteractionOptions = {
   userAssistantDisplayName?: string | null;
   /** Perfil de personalidade 0–100 (persistido). */
   userPersonalityProfile?: UserPersonalityProfile | null;
+  /** Entidades canónicas por sessão (nomes próprios estáveis). */
+  sessionEntityMap?: Record<string, string>;
+  /** Feedback persistido por path de nota (-1…1). */
+  pathFeedback?: Record<string, number>;
 };
 
 export function processInteraction(opts: ProcessInteractionOptions): ANCCProcessResult {
   const nowMs = Date.now();
   const raw = interpretUserInput(opts.userMessage);
   const vaultTitles = opts.vaultFiles.map((f) => f.name.replace(/\.md$/i, ""));
+  const entityMerge = mergeMessageEntities(opts.userMessage, opts.sessionEntityMap ?? {});
   const topicSource = [
     raw.normalizedText,
     opts.sessionSummary?.trim() ?? "",
     opts.crossSessionMemory?.trim() ?? "",
+    entityMerge.entities.length > 0 ? entityMerge.entities.join("\n") : "",
   ]
     .filter(Boolean)
     .join("\n");
   const topicsFromQuery = extractTopics({
-    text: raw.normalizedText,
+    text: [raw.normalizedText, ...entityMerge.entities].join("\n"),
     vaultNoteTitles: vaultTitles,
   });
   const topicsExpanded = extractTopics({
@@ -93,6 +102,8 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
     topicsFromQuery.length > 0 ? topicsFromQuery : topicsExpanded.slice(0, 12);
 
   const recurrenceScore = bumpRecurrence(opts.recurrenceTracker, topics);
+  const retrievalIntent = detectRetrievalIntent(opts.userMessage);
+
   let vaultHits: VaultCorrelationHit[];
   if (opts.precomputedVaultHits && opts.precomputedVaultHits.length > 0) {
     vaultHits = opts.precomputedVaultHits;
@@ -107,6 +118,13 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
     const explicitHits = resolveHintsToExplicitVaultHits(explicitHints, opts.vaultFiles);
     vaultHits = mergeVaultCorrelationHits(vaultHits, explicitHits);
   }
+
+  vaultHits = enrichVaultCorrelationHits(vaultHits, {
+    vaultFiles: opts.vaultFiles,
+    intent: retrievalIntent,
+    entityHints: entityMerge.entities,
+    pathFeedback: opts.pathFeedback ?? {},
+  });
 
   vaultHits = applyVaultPathAffinityToHits(vaultHits, opts.plasticityState.vaultPathAffinity);
   const { forContext: vaultForContext, forPersistence: vaultPersisted } = splitVaultHitsByPersistence(vaultHits);
@@ -211,6 +229,7 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
       links: note.links,
       memoryClass: note.memoryClass,
     },
+    sessionEntityCanonicalMap: entityMerge.map,
   };
 }
 
