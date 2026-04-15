@@ -287,6 +287,37 @@ export default function BrainGraphView({
     [useVault, activeNodes.length, activeEdges.length],
   );
 
+  /**
+   * Modo espectador (conversa avançada): fixa o tamanho usado na semente phyllotaxis de `graphData`.
+   * Sem isto, cada resize do painel (resposta LLM, transcrição) recria nós e “refresca” o grafo.
+   */
+  const [spectatorLayoutDimsLock, setSpectatorLayoutDimsLock] = useState<{ w: number; h: number } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    setSpectatorLayoutDimsLock(null);
+  }, [topologyGraphKey]);
+
+  useLayoutEffect(() => {
+    if (variant !== "spectator" || !useVault) {
+      return;
+    }
+    if (spectatorLayoutDimsLock) {
+      return;
+    }
+    if (dims.w >= 48 && dims.h >= 48) {
+      setSpectatorLayoutDimsLock({ w: dims.w, h: dims.h });
+    }
+  }, [variant, useVault, dims.w, dims.h, spectatorLayoutDimsLock]);
+
+  const layoutDimsForGraph = useMemo(() => {
+    if (variant === "spectator" && useVault && spectatorLayoutDimsLock) {
+      return spectatorLayoutDimsLock;
+    }
+    return dims;
+  }, [variant, useVault, spectatorLayoutDimsLock, dims]);
+
   /** Cordas “fracas” desenhadas no pós-frame — não entram no `graphData` para não reiniciar a física. */
   const spectatorWeakKeysRef = useRef<Set<string> | undefined>(undefined);
   const spectatorPulseRef = useRef(0);
@@ -306,7 +337,7 @@ export default function BrainGraphView({
   }, [focusRootId, adjacency]);
 
   const graphData = useMemo((): GraphData<BrainNode, BrainLink> => {
-    const baseRadius = Math.max(180, Math.min(dims.w, dims.h) * 0.34);
+    const baseRadius = Math.max(180, Math.min(layoutDimsForGraph.w, layoutDimsForGraph.h) * 0.34);
     const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // phyllotaxis
     const nodes: NodeObject<BrainNode>[] = activeNodes.map((n, index) => {
       const deg = degreeMap[n.id] || 1;
@@ -355,8 +386,8 @@ export default function BrainGraphView({
     activeEdges,
     degreeMap,
     groupMap,
-    dims.h,
-    dims.w,
+    layoutDimsForGraph.h,
+    layoutDimsForGraph.w,
     isNativeShell,
     useVault,
   ]);
@@ -559,7 +590,14 @@ export default function BrainGraphView({
     return () => {
       cancelled = true;
     };
-  }, [topologyGraphKey, dims.w, dims.h, isNativeShell, useVault, variant]);
+  }, [
+    topologyGraphKey,
+    variant === "spectator" && useVault ? 0 : dims.w,
+    variant === "spectator" && useVault ? 0 : dims.h,
+    isNativeShell,
+    useVault,
+    variant,
+  ]);
 
   /** Movimento “orgânico” do grafo em função do nível de áudio (conversa avançada). */
   useEffect(() => {
@@ -1094,12 +1132,15 @@ export default function BrainGraphView({
 
   const onEngineStop = useCallback(() => {
     if (dims.w < 48 || dims.h < 48) return;
-    const fitKey = `${topologyGraphKey}|${dims.w}x${dims.h}`;
+    const fitKey =
+      variant === "spectator" && spectatorLockZoom
+        ? `${topologyGraphKey}|spectator-fixed-fit`
+        : `${topologyGraphKey}|${dims.w}x${dims.h}`;
     if (fitDoneKey.current === fitKey) return;
     fitDoneKey.current = fitKey;
     emitNativeDebug("brain-engine-stop", { graphKey: topologyGraphKey, fitKey, dimsW: dims.w, dimsH: dims.h });
     fgRef.current?.zoomToFit(480, 36);
-  }, [topologyGraphKey, dims.w, dims.h]);
+  }, [topologyGraphKey, dims.w, dims.h, variant, spectatorLockZoom]);
 
   const onBackgroundClick = useCallback((_event: MouseEvent) => {
     hoverIdRef.current = null;

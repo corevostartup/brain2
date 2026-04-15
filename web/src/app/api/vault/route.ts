@@ -8,12 +8,21 @@ import {
   renamePresetVault,
   renamePresetConversation,
   savePresetConversation,
+  saveAnccModelMemoryPresetFile,
 } from "@/lib/vaultServer";
 
 export const runtime = "nodejs";
 
 type VaultMutationPayload = {
-  action?: "create-folder" | "rename-folder" | "delete-folder" | "rename-conversation" | "delete-conversation" | "save-conversation" | "rename-vault";
+  action?:
+    | "create-folder"
+    | "rename-folder"
+    | "delete-folder"
+    | "rename-conversation"
+    | "delete-conversation"
+    | "save-conversation"
+    | "save-ancc-model-memory"
+    | "rename-vault";
   parentPath?: string;
   folderName?: string;
   folderPath?: string;
@@ -24,6 +33,8 @@ type VaultMutationPayload = {
   title?: string;
   markdown?: string;
   conversationId?: string;
+  /** `save-ancc-model-memory`: nome do ficheiro sem `.md`. */
+  fileBase?: string;
 };
 
 export async function GET() {
@@ -73,6 +84,8 @@ export async function POST(request: Request) {
         payload.markdown ?? "",
         payload.folderPath
       );
+    } else if (payload.action === "save-ancc-model-memory") {
+      await saveAnccModelMemoryPresetFile(payload.markdown ?? "", payload.fileBase ?? "");
     } else if (payload.action === "rename-vault") {
       await renamePresetVault(payload.vaultName ?? "");
     } else {

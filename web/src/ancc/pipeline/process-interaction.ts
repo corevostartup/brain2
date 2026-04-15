@@ -30,6 +30,7 @@ import { newInteractionId } from "@/ancc/models/metadata";
 import { detectRetrievalIntent } from "@/ancc/pipeline/retrieval-intent";
 import { mergeMessageEntities } from "@/ancc/pipeline/stable-entities";
 import { enrichVaultCorrelationHits } from "@/ancc/pipeline/enrich-vault-retrieval";
+import { formatLocalDateKey } from "@/lib/anccTemporalMemory";
 
 export type TopicRecurrenceTracker = {
   counts: Map<string, number>;
@@ -74,6 +75,18 @@ export type ProcessInteractionOptions = {
   sessionEntityMap?: Record<string, string>;
   /** Feedback persistido por path de nota (-1…1). */
   pathFeedback?: Record<string, number>;
+  /**
+   * Reflexões do assistente (memória ANCC própria do modelo), texto curto;
+   * não são memórias factuais do utilizador.
+   */
+  modelOwnedMemory?: string;
+  /** Lembretes cujo dia é hoje (local) — integrar na resposta. */
+  temporalReminderLines?: string[];
+  /**
+   * YYYY-MM-DD no calendário local (geralmente «hoje» no momento do envio).
+   * Usado no bloco ANCC para o modelo converter «daqui a duas semanas» em dueLocalDate.
+   */
+  referenceLocalDateKey?: string;
 };
 
 export function processInteraction(opts: ProcessInteractionOptions): ANCCProcessResult {
@@ -179,15 +192,22 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
     const base = opts.recentBullets ?? [];
     const sum = opts.sessionSummary?.trim();
     const cross = opts.crossSessionMemory?.trim();
+    const owned = opts.modelOwnedMemory?.trim();
     const out: string[] = [];
     if (cross) {
       out.push(`Memória recente (outras conversas): ${cross.slice(0, 520)}`);
+    }
+    if (owned) {
+      out.push(`Reflexões anteriores do assistente (podem mudar; não são factos do utilizador): ${owned.slice(0, 640)}`);
     }
     if (sum) {
       out.push(`Rumo da conversa: ${sum.slice(0, 420)}`);
     }
     return [...out, ...base];
   })();
+
+  const referenceLocalDateKey =
+    opts.referenceLocalDateKey?.trim() || formatLocalDateKey(new Date());
 
   const assembled = assembleContext({
     topics,
@@ -196,6 +216,8 @@ export function processInteraction(opts: ProcessInteractionOptions): ANCCProcess
     vaultCorrelations: vaultForContext,
     vaultCorrelationsPersisted: vaultPersisted,
     recentBullets,
+    temporalReminderLines: opts.temporalReminderLines,
+    referenceLocalDateKey,
     userAssistantDisplayName: opts.userAssistantDisplayName ?? null,
     userPersonalityProfile: opts.userPersonalityProfile ?? null,
   });

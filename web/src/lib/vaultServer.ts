@@ -11,6 +11,7 @@ import {
   buildGraphFromMarkdownFiles,
   type VaultMarkdownFile,
 } from "@/lib/vaultMarkdown";
+import { ANCC_MODEL_MEMORY_FOLDER } from "@/lib/anccModelMemory";
 
 export let PRESET_VAULT_PATH =
   "/Users/Cassio/Library/Mobile Documents/com~apple~CloudDocs/Brain2/Vault";
@@ -363,6 +364,22 @@ export async function renamePresetVault(vaultName: string): Promise<void> {
 
   await fs.rename(currentRootPath, nextRootPath);
   PRESET_VAULT_PATH = nextRootPath;
+}
+
+/**
+ * Grava nota de memória própria do assistente (ANCC) no vault preset.
+ * Caminho relativo: `_Brain2/ANCC_Model_Memory/<fileBase>.md` — excluído do grafo «Your Brain».
+ */
+export async function saveAnccModelMemoryPresetFile(markdown: string, fileBase: string): Promise<void> {
+  if (!markdown.trim()) {
+    throw new Error("Markdown is required.");
+  }
+  const safe = sanitizeFileSegment(fileBase || "memory", "memory");
+  const relativePath = `${ANCC_MODEL_MEMORY_FOLDER}/${safe}.md`;
+  const absolutePath = resolvePresetPath(relativePath);
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  const normalized = markdown.endsWith("\n") ? markdown : `${markdown}\n`;
+  await fs.writeFile(absolutePath, normalized, "utf8");
 }
 
 export async function savePresetConversation(

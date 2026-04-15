@@ -36,6 +36,12 @@ export type AssembledContext = {
    */
   vaultCorrelationsPersisted: VaultCorrelationHit[];
   behavioralGuidance: string[];
+  /**
+   * Lembretes com dia = hoje (local) — o modelo deve integrar na resposta de forma natural e calorosa.
+   */
+  temporalReminderLines: string[];
+  /** YYYY-MM-DD no calendário local do utilizador — âncora para converter expressões relativas no fence temporal. */
+  referenceLocalDateKey: string;
 };
 
 export type ANCCProcessResult = {

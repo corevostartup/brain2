@@ -1,5 +1,9 @@
 import type { AssembledContext } from "@/ancc/models/context";
-import { ANCC_CONTEXT_MARKERS, ANCC_VAULT_MEMORY_CONTRACT } from "@/ancc/rules/prompt-injection.rules";
+import {
+  ANCC_CONTEXT_MARKERS,
+  ANCC_MODEL_MEMORY_FENCE_INSTRUCTION,
+  ANCC_VAULT_MEMORY_CONTRACT,
+} from "@/ancc/rules/prompt-injection.rules";
 
 function formatCorrelationLine(hit: AssembledContext["vaultCorrelations"][number]): string {
   const topics = hit.matchedTopics.length ? hit.matchedTopics.join(", ") : "—";
@@ -60,9 +64,26 @@ export function buildHiddenSystemPromptBlock(ctx: AssembledContext): string {
       lines.push(`- ${b}`);
     }
   }
+  lines.push(
+    "Lembretes temporais (dia de hoje — integra na resposta com naturalidade e calor humano; não listes como agenda):",
+  );
+  if (ctx.temporalReminderLines.length === 0) {
+    lines.push("- (nenhum)");
+  } else {
+    for (const line of ctx.temporalReminderLines) {
+      lines.push(`- ${line}`);
+    }
+  }
   lines.push("Behavioral guidance:");
   for (const g of ctx.behavioralGuidance) {
     lines.push(`- ${g}`);
+  }
+  lines.push(
+    `Referência de calendário (local do utilizador): o dia «hoje» é ${ctx.referenceLocalDateKey}. No JSON \`temporal\` do fence, converte expressões relativas (amanhã, daqui a N dias/semanas/meses, semana que vem, etc.) para \`dueLocalDate\` em YYYY-MM-DD a partir deste dia; aproximações são aceitáveis.`,
+  );
+  lines.push("Memória inferida do assistente (ANCC — opcional):");
+  for (const line of ANCC_MODEL_MEMORY_FENCE_INSTRUCTION) {
+    lines.push(line);
   }
   lines.push(ANCC_CONTEXT_MARKERS.end);
   return lines.join("\n");

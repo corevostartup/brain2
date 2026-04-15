@@ -13,6 +13,10 @@ struct IOSGoogleSignInScreen: View {
     var onGoogleSignIn: () -> Void
     var onContinueToWeb: () -> Void
 
+    private var isGoogleSignInEnabled: Bool {
+        configurationError == nil
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -71,7 +75,8 @@ struct IOSGoogleSignInScreen: View {
                         )
                     }
                     .buttonStyle(.plain)
-                    .disabled(isBusy)
+                    .disabled(isBusy || !isGoogleSignInEnabled)
+                    .opacity(isGoogleSignInEnabled ? 1 : 0.45)
 
                     Button(action: onContinueToWeb) {
                         Text("Entrar na conta no site")

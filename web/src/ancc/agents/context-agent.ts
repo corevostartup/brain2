@@ -13,6 +13,10 @@ export function assembleContext(input: {
   vaultCorrelations: VaultCorrelationHit[];
   vaultCorrelationsPersisted: VaultCorrelationHit[];
   recentBullets: string[];
+  /** Frases curtas: lembretes temporais cujo dia é hoje (prioridade na resposta). */
+  temporalReminderLines?: string[];
+  /** Dia «hoje» YYYY-MM-DD (local) para datas relativas no fence. */
+  referenceLocalDateKey: string;
   /** Nome de exibição pedido pelo utilizador — reforçado no bloco ANCC. */
   userAssistantDisplayName?: string | null;
   /** Níveis 0–100 por traço (personalidade persistida). */
@@ -47,5 +51,7 @@ export function assembleContext(input: {
     vaultCorrelations: input.vaultCorrelations,
     vaultCorrelationsPersisted: input.vaultCorrelationsPersisted,
     behavioralGuidance,
+    temporalReminderLines: input.temporalReminderLines ?? [],
+    referenceLocalDateKey: input.referenceLocalDateKey,
   };
 }

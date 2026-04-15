@@ -82,7 +82,7 @@ export default function LoginView({ onLogin, authLoading = false, authError = nu
         <p>Entre para acessar seu segundo cerebro.</p>
         {showMacGoogleHint ? (
           <p className="login-mac-google-hint">
-            No app Mac, o Google abre numa janela do sistema (como no Cursor). Depois do login, voltas automaticamente ao Brain2.
+            No app Brain2 (Mac ou iPhone), o Google abre na janela de login do sistema (Safari / ASWebAuthenticationSession), não dentro do navegador embutido. Depois do login, voltas automaticamente à app.
           </p>
         ) : null}
 

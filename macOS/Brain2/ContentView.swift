@@ -457,6 +457,12 @@ struct WebView: NSViewRepresentable {
                 return
             }
 
+            if type == "saveAnccModelMemory" {
+                let memoryPayload = payload["payload"] as? [String: Any] ?? [:]
+                saveAnccModelMemoryToVault(memoryPayload)
+                return
+            }
+
             if type == "createFolder" {
                 let folderPayload = payload["payload"] as? [String: Any] ?? [:]
                 createVaultSubfolderFromWeb(folderPayload)
@@ -853,6 +859,11 @@ struct WebView: NSViewRepresentable {
                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'saveConversation', payload: payload || {} });
               } catch (_) {}
             };
+            window.Brain2Native.saveAnccModelMemory = function (payload) {
+              try {
+                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'saveAnccModelMemory', payload: payload || {} });
+              } catch (_) {}
+            };
                         window.Brain2Native.saveLlmConfig = function (payload) {
                             try {
                                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'saveLlmConfig', payload: payload || {} });
@@ -1087,6 +1098,48 @@ struct WebView: NSViewRepresentable {
                     } catch {
                         #if DEBUG
                         NSLog("[Brain2 Native] saveConversationToVault falhou: \(error.localizedDescription)")
+                        #endif
+                        return
+                    }
+
+                    self.publishVaultSelection(for: vaultURL)
+                }
+            }
+        }
+
+        /// Memória inferida ANCC do modelo — `_Brain2/ANCC_Model_Memory/<fileBase>.md` (fora do grafo «Your Brain» na web).
+        private func saveAnccModelMemoryToVault(_ payload: [String: Any]) {
+            guard let vaultURL = resolvePersistedVaultURL() else {
+                #if DEBUG
+                NSLog("[Brain2 Native] saveAnccModelMemoryToVault: sem security-scoped bookmark")
+                #endif
+                return
+            }
+
+            guard
+                let markdown = payload["markdown"] as? String,
+                !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return
+            }
+
+            let rawBase = (payload["fileBase"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "memory"
+            let safeBase = sanitizeFileName(rawBase)
+
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+
+                self.withSecurityScopedAccess(to: vaultURL) {
+                    do {
+                        let folderURL = vaultURL
+                            .appendingPathComponent("_Brain2", isDirectory: true)
+                            .appendingPathComponent("ANCC_Model_Memory", isDirectory: true)
+                        try self.fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
+                        let fileURL = folderURL.appendingPathComponent("\(safeBase).md")
+                        try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+                    } catch {
+                        #if DEBUG
+                        NSLog("[Brain2 Native] saveAnccModelMemoryToVault falhou: \(error.localizedDescription)")
                         #endif
                         return
                     }

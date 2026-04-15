@@ -29,6 +29,8 @@ import {
   type VaultConversation,
   type VaultGraph,
   type FolderTreeNode,
+  loadDirectoryHandle,
+  verifyWritePermission,
 } from "@/lib/vault";
 import type { ChatMessage } from "@/lib/chat";
 import {
@@ -93,6 +95,35 @@ import {
   getRecentMemoryQueryText,
 } from "@/lib/anccRecentMemory";
 import {
+  fileNameForModelMemoryEntry,
+  formatModelMemoryForAnccContext,
+  formatModelMemoryMarkdown,
+  integrateFinalizeIntoModelMemory,
+  loadModelMemoryState,
+  saveModelMemoryState,
+  type ModelMemoryEntry,
+} from "@/lib/anccModelMemory";
+import { writeAnccModelMemoryToBrowserVault } from "@/lib/anccModelMemoryVaultWrite";
+import {
+  pickStorableStructuredMemories,
+  pickStorableTemporalItems,
+  stripBrain2ModelMemoryFence,
+} from "@/lib/anccModelMemoryStructured";
+import {
+  fetchAnccStructuredMicro,
+  isAnccModelMemoryMicroEnabled,
+} from "@/lib/anccModelMemoryMicroClient";
+import {
+  formatLocalDateKey,
+  getPendingRemindersForToday,
+  loadTemporalMemoryState,
+  markTemporalRemindersNotified,
+  mergeTemporalItemsIntoState,
+  saveTemporalMemoryState,
+  userMessageSuggestsTemporalExtract,
+} from "@/lib/anccTemporalMemory";
+import { tryExtractRelativeTemporalFromUserMessage } from "@/lib/temporalRelativeResolve";
+import {
   buildVaultConversationMarkdown,
   extractFolderPathFromVaultPath,
   parseVaultConversationMarkdownToChatMessages,
@@ -138,6 +169,11 @@ type VaultMutationPayload =
       title: string;
       markdown: string;
       folderPath?: string;
+    }
+  | {
+      action: "save-ancc-model-memory";
+      markdown: string;
+      fileBase: string;
     };
 
 type NativeVaultPayload = {
@@ -159,6 +195,8 @@ type NativeBridge = {
     markdown: string;
     folderPath?: string;
   }) => void;
+  /** App macOS: grava em `_Brain2/ANCC_Model_Memory/` no vault com bookmark. */
+  saveAnccModelMemory?: (payload: { markdown: string; fileBase: string }) => void;
   createFolder?: (payload: { parentPath: string; folderName: string }) => void;
   renameFolder?: (payload: { folderPath: string; newFolderName: string }) => void;
 };
@@ -380,6 +418,13 @@ function normalizeGraph(
 /** Tempo minimo da splash; o Firebase pode resolver a sessao em poucos ms. */
 const MIN_AUTH_SPLASH_MS = 2800;
 
+function isAbortError(error: unknown): boolean {
+  return (
+    (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
 export default function Home() {
   const [isAuthInitializing, setIsAuthInitializing] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -436,6 +481,8 @@ export default function Home() {
    * geravam dois `sessionId`/`startedAt` antes do setState — dois ficheiros para a mesma conversa.
    */
   const newChatSessionLockRef = useRef<{ sessionId: string; startedAt: number } | null>(null);
+  /** Cancela o `fetch` do LLM (conversa avançada: interrupção pela voz do utilizador). */
+  const brainChatAbortRef = useRef<AbortController | null>(null);
   const [isNativeMacShell, setIsNativeMacShell] = useState(() =>
     typeof window !== "undefined" && isBrain2NativeAppShell(),
   );
@@ -572,7 +619,7 @@ export default function Home() {
         await signInWithGoogleNativeIdToken(idToken, custom.detail?.accessToken);
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : "Falha ao entrar com a conta Google (app Mac).";
+          err instanceof Error ? err.message : "Falha ao entrar com a conta Google (app Brain2).";
         setAuthError(message);
       }
     };
@@ -1011,6 +1058,39 @@ export default function Home() {
       setGraphLoading(false);
     }
   }, [applyVaultData]);
+
+  /** Memória ANCC do modelo: nativo Mac → bridge; browser com pasta → File System Access; senão vault preset (dev). */
+  const persistAnccModelMemoryToVault = useCallback(
+    async (entry: ModelMemoryEntry | null) => {
+      if (!entry) {
+        return;
+      }
+      const markdown = formatModelMemoryMarkdown(entry);
+      const fileBase = fileNameForModelMemoryEntry(entry);
+      const bridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
+      if (typeof bridge?.saveAnccModelMemory === "function") {
+        bridge.saveAnccModelMemory({ markdown, fileBase });
+        return;
+      }
+      try {
+        const handle = await loadDirectoryHandle();
+        if (handle && (await verifyWritePermission(handle))) {
+          await writeAnccModelMemoryToBrowserVault(handle, markdown, fileBase);
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
+      if (!hasNativeVaultData && !hasCloudVaultData) {
+        await mutatePresetVaultData({
+          action: "save-ancc-model-memory",
+          markdown,
+          fileBase,
+        });
+      }
+    },
+    [hasCloudVaultData, hasNativeVaultData, mutatePresetVaultData]
+  );
 
   /**
    * Clicar numa pasta (ou «Todas as pastas») foca uma nova conversa nesse contexto:
@@ -1536,23 +1616,32 @@ export default function Home() {
         setUserPersonalityProfile(nextPersonality);
       }
 
-      setChatError(null);
       setIsSettingsOpen(false);
       setIsYourBrainOpen(false);
       setChatLoading(true);
       setVaultFeedbackPaths([]);
+
+      const abortController = new AbortController();
+      brainChatAbortRef.current = abortController;
+      const { signal } = abortController;
 
       let anccForPersist: ANCCProcessResult | null = null;
 
       try {
       const vaultFiles = buildVaultSnapshotsForAncc(vaultConversations);
       const crossSessionMemory = getRecentMemoryQueryText();
+      const todayLocalKey = formatLocalDateKey(new Date());
+      const temporalStateForTurn = loadTemporalMemoryState();
+      const pendingTemporalReminders = getPendingRemindersForToday(temporalStateForTurn, todayLocalKey);
+      const temporalReminderLines = pendingTemporalReminders.map((r) => r.summary);
+      const pendingTemporalIds = pendingTemporalReminders.map((r) => r.id);
       let precomputedVaultHits: VaultCorrelationHit[] | undefined;
       if (payload.apiKey.trim()) {
         try {
           const retrieveRes = await fetch("/api/ancc-retrieve", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            signal,
             body: JSON.stringify({
               apiKey: payload.apiKey,
               userMessage: payload.content,
@@ -1570,7 +1659,10 @@ export default function Home() {
               precomputedVaultHits = retrieveJson.hits;
             }
           }
-        } catch {
+        } catch (e) {
+          if (isAbortError(e)) {
+            throw e;
+          }
           /* retrieval híbrido opcional — fallback só-lexical no cliente */
         }
       }
@@ -1583,6 +1675,9 @@ export default function Home() {
         recentBullets: buildAnccRecentBullets(requestMessages),
         sessionSummary: anccRollingSummaryRef.current.trim() || undefined,
         crossSessionMemory: crossSessionMemory || undefined,
+        modelOwnedMemory: formatModelMemoryForAnccContext(loadModelMemoryState()),
+        temporalReminderLines,
+        referenceLocalDateKey: todayLocalKey,
         precomputedVaultHits,
         userAssistantDisplayName: displayNameForTurn,
         userPersonalityProfile: personalityForTurn,
@@ -1622,6 +1717,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
+        signal,
         body: JSON.stringify({
           model: payload.model,
           apiKey: payload.apiKey,
@@ -1634,34 +1730,100 @@ export default function Home() {
         throw new Error(data.error || "Falha ao consultar o modelo LLM.");
       }
 
-      const assistantText = data.message?.trim();
-      if (!assistantText) {
+      const assistantRaw = data.message?.trim();
+      if (!assistantRaw) {
         throw new Error("Resposta vazia do modelo.");
       }
+
+      const fenceParsed = stripBrain2ModelMemoryFence(assistantRaw);
+      const displayAssistant = fenceParsed.displayText;
+      const fenceStorable = pickStorableStructuredMemories(fenceParsed.memories);
+      let structuredMemories = fenceStorable;
+      let structuredTemporal = pickStorableTemporalItems(fenceParsed.temporal);
+      if (structuredTemporal.length === 0) {
+        structuredTemporal = pickStorableTemporalItems(
+          tryExtractRelativeTemporalFromUserMessage(payload.content, new Date()),
+        );
+      }
+      const explicitSkipHeuristicPersistence =
+        fenceParsed.hadFence && !fenceParsed.parseError && fenceStorable.length === 0;
 
       const vaultTitlesForOutcome = vaultFiles.map((f) => f.name.replace(/\.md$/i, ""));
       const finalized = finalizeInteractionAfterResponse({
         userMessage: payload.content,
-        assistantMessage: assistantText,
+        assistantMessage: displayAssistant,
         preInteractionResult: anccResult,
         plasticityState: anccSessionRef.current.plasticity,
         vaultNoteTitles: vaultTitlesForOutcome,
       });
+
+      const shouldMicroMemories =
+        structuredMemories.length === 0 &&
+        !explicitSkipHeuristicPersistence &&
+        displayAssistant.length > 60 &&
+        (finalized.outcome === "useful" ||
+          finalized.outcome === "deepened" ||
+          finalized.outcome === "redirected");
+      const shouldMicroTemporal =
+        structuredTemporal.length === 0 && userMessageSuggestsTemporalExtract(payload.content);
+      const canCallMicro =
+        isAnccModelMemoryMicroEnabled() &&
+        (shouldMicroMemories || shouldMicroTemporal) &&
+        ((shouldMicroMemories && displayAssistant.length > 60) ||
+          (shouldMicroTemporal && displayAssistant.length > 15));
+
+      if (canCallMicro) {
+        const micro = await fetchAnccStructuredMicro({
+          model: payload.model,
+          apiKey: payload.apiKey,
+          userMessage: payload.content,
+          assistantMessage: displayAssistant,
+          outcome: finalized.outcome,
+          assistantTopics: finalized.assistantTopics,
+          referenceLocalDate: todayLocalKey,
+          conversationStartedAt: startedAt,
+        });
+        if (shouldMicroMemories) {
+          structuredMemories = pickStorableStructuredMemories(micro.memories);
+        }
+        if (shouldMicroTemporal) {
+          structuredTemporal = pickStorableTemporalItems(micro.temporal);
+        }
+      }
+
+      const mmIntegrated = integrateFinalizeIntoModelMemory({
+        state: loadModelMemoryState(),
+        userMessage: payload.content,
+        assistantMessage: displayAssistant,
+        finalized,
+        structuredMemories,
+        explicitSkipHeuristicPersistence,
+      });
+      saveModelMemoryState(mmIntegrated.state);
+      void persistAnccModelMemoryToVault(mmIntegrated.newEntry);
+
+      let temporalState = loadTemporalMemoryState();
+      temporalState = mergeTemporalItemsIntoState(temporalState, structuredTemporal);
+      if (pendingTemporalIds.length > 0) {
+        temporalState = markTemporalRemindersNotified(temporalState, pendingTemporalIds, todayLocalKey);
+      }
+      saveTemporalMemoryState(temporalState);
+
       anccForPersist = enrichAnccProcessResultWithOutcome(anccResult, finalized);
 
       anccRollingSummaryRef.current = appendRollingSessionSummary(
         anccRollingSummaryRef.current,
         payload.content,
-        assistantText,
+        displayAssistant,
       );
-      appendRecentMemoryAfterTurn(payload.content, assistantText);
+      appendRecentMemoryAfterTurn(payload.content, displayAssistant);
 
       const nextMessages = [
         ...requestMessages,
         {
           id: createMessageId(),
           role: "assistant" as const,
-          content: assistantText,
+          content: displayAssistant,
           createdAt: Date.now(),
         },
       ];
@@ -1674,6 +1836,7 @@ export default function Home() {
       if (feedbackKeys.length > 0) {
         setVaultFeedbackPaths(feedbackKeys);
       }
+      setChatError(null);
       setChatMessages(nextMessages);
       persistChatConversation({
         sessionId,
@@ -1684,6 +1847,18 @@ export default function Home() {
         anccResult: anccForPersist,
       });
     } catch (error) {
+      if (isAbortError(error)) {
+        setChatError(null);
+        persistChatConversation({
+          sessionId,
+          startedAt,
+          model: payload.model,
+          messages: requestMessages,
+          folderPath: targetFolderPathForConversation,
+          anccResult: anccForPersist,
+        });
+        return;
+      }
       const message = error instanceof Error ? error.message : "Erro inesperado ao gerar resposta.";
       setChatError(message);
 
@@ -1698,6 +1873,9 @@ export default function Home() {
       });
       throw error instanceof Error ? error : new Error(message);
     } finally {
+      if (brainChatAbortRef.current === abortController) {
+        brainChatAbortRef.current = null;
+      }
       setChatLoading(false);
     }
   }, [
@@ -1706,6 +1884,7 @@ export default function Home() {
     chatSessionId,
     chatSessionStartedAt,
     createMessageId,
+    persistAnccModelMemoryToVault,
     persistChatConversation,
     selectedConversationId,
     selectedFolderPath,
@@ -1750,6 +1929,10 @@ export default function Home() {
     },
     [chatMessages.length, handleSendToBrain],
   );
+
+  const handleAdvancedVoiceInterrupt = useCallback(() => {
+    brainChatAbortRef.current?.abort();
+  }, []);
 
   const handleNewConversation = useCallback(() => {
     setIsSettingsOpen(false);
@@ -1798,10 +1981,8 @@ export default function Home() {
           bridge.startGoogleSignIn();
           return;
         }
-      }
-
-      if (isBrain2NativeAppShell()) {
-        await signInWithRedirect(auth, provider);
+        // Shell nativo (WKWebView) mas a bridge ainda não injetou — não usar redirect/popup aqui (Google bloqueia).
+        setAuthError("A preparar o login nativo… Toque de novo dentro de instantes.");
         return;
       }
 
@@ -2041,6 +2222,7 @@ export default function Home() {
             messages={chatMessages}
             loading={chatLoading}
             error={chatError}
+            onDismissChatError={() => setChatError(null)}
             vaultFeedbackPaths={vaultFeedbackPaths}
             onVaultMemoryFeedback={handleVaultMemoryFeedback}
           />
@@ -2050,6 +2232,7 @@ export default function Home() {
             vaultGraph={vaultGraph}
             vaultGraphLoading={graphLoading}
             onSubmitTranscript={handleAdvancedVoiceSubmit}
+            onInterruptResponse={handleAdvancedVoiceInterrupt}
             isLlmLoading={chatLoading}
             lastAssistantText={lastAssistantReply}
             assistantReplyEpoch={assistantReplyEpoch}

@@ -1,19 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type UIEvent, type WheelEvent } from "react";
-import { Check, Copy, ScrollText, Square, Volume2 } from "lucide-react";
+import { Check, Copy, ScrollText, Square, Volume2, X } from "lucide-react";
 import type { ChatMessage } from "@/lib/chat";
 import {
-  cancelBrowserSpeech,
   isBrowserSpeechSynthesisAvailable,
   speakBrowserText,
 } from "@/lib/browserSpeechSynthesis";
+import { loadLlmConfig } from "@/lib/llmClientConfig";
+import {
+  cancelAllAssistantSpeech,
+  playOpenAiSpeech,
+  readOpenAiTtsOutputEnabled,
+} from "@/lib/openAiSpeech";
 
 type ChatViewProps = {
   title: string;
   messages: ChatMessage[];
   loading: boolean;
   error: string | null;
+  /** Limpa o erro do chat (botão «Dispensar»). */
+  onDismissChatError?: () => void;
   /** Caminhos de notas usadas na última resposta — feedback ANCC. */
   vaultFeedbackPaths?: string[];
   onVaultMemoryFeedback?: (helpful: boolean) => void;
@@ -62,6 +69,7 @@ export default function ChatView({
   messages,
   loading,
   error,
+  onDismissChatError,
   vaultFeedbackPaths = [],
   onVaultMemoryFeedback,
 }: ChatViewProps) {
@@ -76,18 +84,29 @@ export default function ChatView({
   const [typingText, setTypingText] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [speechTarget, setSpeechTarget] = useState<SpeechTarget | null>(null);
-  const [ttsAvailable, setTtsAvailable] = useState(false);
+  const [browserTts, setBrowserTts] = useState(false);
+  const [, bumpOpenAiTtsPrefs] = useState(0);
 
   useEffect(() => {
-    queueMicrotask(() => setTtsAvailable(isBrowserSpeechSynthesisAvailable()));
+    queueMicrotask(() => setBrowserTts(isBrowserSpeechSynthesisAvailable()));
   }, []);
+
+  useEffect(() => {
+    const bump = () => bumpOpenAiTtsPrefs((n) => n + 1);
+    window.addEventListener("brain2-openai-tts-changed", bump);
+    return () => window.removeEventListener("brain2-openai-tts-changed", bump);
+  }, []);
+
+  const openAiTtsOn = readOpenAiTtsOutputEnabled();
+  const apiKey = loadLlmConfig()?.apiKey?.trim() ?? "";
+  const ttsAvailable = browserTts || Boolean(openAiTtsOn && apiKey);
 
   useEffect(() => {
     return () => {
       if (copyTimeoutRef.current !== null) {
         window.clearTimeout(copyTimeoutRef.current);
       }
-      cancelBrowserSpeech();
+      cancelAllAssistantSpeech();
     };
   }, []);
 
@@ -96,7 +115,7 @@ export default function ChatView({
       return;
     }
     if (speechTarget?.kind === "reply" && speechTarget.messageId === messageId) {
-      cancelBrowserSpeech();
+      cancelAllAssistantSpeech();
       setSpeechTarget(null);
       return;
     }
@@ -104,21 +123,27 @@ export default function ChatView({
     if (!text) {
       return;
     }
-    cancelBrowserSpeech();
+    cancelAllAssistantSpeech();
     setSpeechTarget({ kind: "reply", messageId });
+    const clearReply = () => {
+      setSpeechTarget((current) =>
+        current?.kind === "reply" && current.messageId === messageId ? null : current,
+      );
+    };
+    if (readOpenAiTtsOutputEnabled() && apiKey) {
+      void playOpenAiSpeech(text, apiKey, {
+        onEnd: clearReply,
+        onError: () => {
+          clearReply();
+        },
+      });
+      return;
+    }
     speakBrowserText(text, {
-      onEnd: () => {
-        setSpeechTarget((current) =>
-          current?.kind === "reply" && current.messageId === messageId ? null : current,
-        );
-      },
-      onError: () => {
-        setSpeechTarget((current) =>
-          current?.kind === "reply" && current.messageId === messageId ? null : current,
-        );
-      },
+      onEnd: clearReply,
+      onError: clearReply,
     });
-  }, [ttsAvailable, speechTarget]);
+  }, [ttsAvailable, speechTarget, apiKey]);
 
   const speakOrStopConversationThroughAssistant = useCallback(
     (assistantMessageId: string) => {
@@ -129,7 +154,7 @@ export default function ChatView({
         speechTarget?.kind === "conversationThrough" &&
         speechTarget.assistantMessageId === assistantMessageId
       ) {
-        cancelBrowserSpeech();
+        cancelAllAssistantSpeech();
         setSpeechTarget(null);
         return;
       }
@@ -144,26 +169,30 @@ export default function ChatView({
       if (!text) {
         return;
       }
-      cancelBrowserSpeech();
+      cancelAllAssistantSpeech();
       setSpeechTarget({ kind: "conversationThrough", assistantMessageId });
+      const clearConv = () => {
+        setSpeechTarget((current) =>
+          current?.kind === "conversationThrough" && current.assistantMessageId === assistantMessageId
+            ? null
+            : current,
+        );
+      };
+      if (readOpenAiTtsOutputEnabled() && apiKey) {
+        void playOpenAiSpeech(text, apiKey, {
+          onEnd: clearConv,
+          onError: () => {
+            clearConv();
+          },
+        });
+        return;
+      }
       speakBrowserText(text, {
-        onEnd: () => {
-          setSpeechTarget((current) =>
-            current?.kind === "conversationThrough" && current.assistantMessageId === assistantMessageId
-              ? null
-              : current,
-          );
-        },
-        onError: () => {
-          setSpeechTarget((current) =>
-            current?.kind === "conversationThrough" && current.assistantMessageId === assistantMessageId
-              ? null
-              : current,
-          );
-        },
+        onEnd: clearConv,
+        onError: clearConv,
       });
     },
-    [ttsAvailable, speechTarget, messages],
+    [ttsAvailable, speechTarget, messages, apiKey],
   );
 
   const updateFollowFromScrollPosition = useCallback(() => {
@@ -457,8 +486,18 @@ export default function ChatView({
 
           {error && (
             <div className="chat-row chat-row--assistant">
-              <article className="chat-error" role="alert">
-                {error}
+              <article className="chat-error-banner" role="alert">
+                <p className="chat-error-text">{error}</p>
+                {onDismissChatError ? (
+                  <button
+                    type="button"
+                    className="chat-error-dismiss"
+                    onClick={onDismissChatError}
+                    aria-label="Dispensar mensagem de erro"
+                  >
+                    <X size={16} strokeWidth={2} aria-hidden />
+                  </button>
+                ) : null}
               </article>
             </div>
           )}
@@ -711,12 +750,45 @@ export default function ChatView({
           }
         }
 
-        .chat-error {
+        .chat-error-banner {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
           width: 100%;
           max-width: 100%;
+          padding: 10px 12px;
+          border-radius: 10px;
+          background: rgba(180, 60, 60, 0.12);
+          border: 1px solid rgba(200, 90, 90, 0.35);
+        }
+
+        .chat-error-text {
+          flex: 1;
+          margin: 0;
+          min-width: 0;
           font-family: 'Inter', sans-serif;
           font-size: 12px;
-          color: #d97a7a;
+          line-height: 1.45;
+          color: #e8a0a0;
+        }
+
+        .chat-error-dismiss {
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 4px;
+          margin: -4px -4px -4px 0;
+          border: none;
+          border-radius: 6px;
+          background: transparent;
+          color: #c88888;
+          cursor: pointer;
+        }
+
+        .chat-error-dismiss:hover {
+          background: rgba(255, 255, 255, 0.06);
+          color: #e8b0b0;
         }
 
         @media (max-width: 979px) {

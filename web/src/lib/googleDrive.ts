@@ -133,6 +133,23 @@ async function requestAccessToken(interactive: boolean): Promise<string> {
 
   const tokenClient = await getGoogleTokenClient();
 
+  /** O SDK do Google usa `console.error` para popups bloqueados — isso dispara o overlay vermelho do Next.js em dev. */
+  const origConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    const first = args[0];
+    if (
+      typeof first === "string" &&
+      (first.includes("[GSI_LOGGER]") || first.includes("Failed to open popup"))
+    ) {
+      return;
+    }
+    origConsoleError.apply(console, args);
+  };
+  const restoreConsole = () => {
+    console.error = origConsoleError;
+  };
+  const restoreTimer = window.setTimeout(restoreConsole, 8000);
+
   const response = await new Promise<GoogleTokenResponse>((resolve, reject) => {
     tokenClient.callback = (tokenResponse: GoogleTokenResponse) => {
       resolve(tokenResponse);
@@ -145,6 +162,9 @@ async function requestAccessToken(interactive: boolean): Promise<string> {
     } catch (error) {
       reject(error);
     }
+  }).finally(() => {
+    window.clearTimeout(restoreTimer);
+    restoreConsole();
   });
 
   if (response.error) {

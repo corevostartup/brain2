@@ -7,7 +7,7 @@
 ehthumbs.db
 Thumbs.db
 
-# OAuth / segredos locais (Mac); nunca commitar chaves Google
+# OAuth / segredos locais; nunca commitar chaves Google
 macOS/Brain2/NativeOAuthSecrets.Local.swift
 iOS/brain2-iOS/NativeOAuthSecrets.Local.swift
 

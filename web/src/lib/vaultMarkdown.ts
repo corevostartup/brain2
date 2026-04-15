@@ -1,4 +1,5 @@
 import type { VaultConversation, VaultGraph } from "@/lib/vault";
+import { isAnccModelMemoryVaultPath } from "@/lib/anccModelMemory";
 import {
   VAULT_LOOSE_MEMORIES_FOLDER_NAME,
   VAULT_MEMORIES_FOLDER_NOTE_BASENAME,
@@ -93,7 +94,7 @@ function linkKeyUndirected(a: string, b: string): string {
  * (A lista de conversas na UI continua a filtrar hubs — ver `buildConversationsFromMarkdownFiles` / sidebar.)
  */
 export function buildGraphFromMarkdownFiles(files: VaultMarkdownFile[]): VaultGraph {
-  const usable = files;
+  const usable = files.filter((f) => !isAnccModelMemoryVaultPath(f.path));
 
   const nodes: VaultGraph["nodes"] = usable.map((f) => {
     const id = normalizePathKey(f.path);

@@ -147,6 +147,19 @@ export async function verifyPermission(
   return false;
 }
 
+/** Necessário para criar ficheiros no vault (ex.: memórias ANCC do modelo). */
+export async function verifyWritePermission(
+  handle: FileSystemDirectoryHandle
+): Promise<boolean> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const opts = { mode: "readwrite" } as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((await (handle as any).queryPermission(opts)) === "granted") return true;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((await (handle as any).requestPermission(opts)) === "granted") return true;
+  return false;
+}
+
 // ── Folder tree type ──
 
 export type FolderTreeNode = {
@@ -241,6 +254,8 @@ async function readAllMarkdownFiles(
   return files;
 }
 
+import { isAnccModelMemoryVaultPath } from "@/lib/anccModelMemory";
+
 // ── Parse Obsidian-style [[wikilinks]] from markdown content ──
 
 const WIKILINK_REGEX = /\[\[([^\]|#]+?)(?:#[^\]|]*)?(?:\|[^\]]*?)?\]\]/g;
@@ -264,7 +279,9 @@ function parseWikilinks(content: string): string[] {
 export async function buildGraphFromVault(
   dirHandle: FileSystemDirectoryHandle
 ): Promise<VaultGraph> {
-  const files = await readAllMarkdownFiles(dirHandle);
+  const files = (await readAllMarkdownFiles(dirHandle)).filter(
+    (f) => !isAnccModelMemoryVaultPath(f.path)
+  );
 
   // Build node map: key = lowercase name, value = display name
   const nodeMap = new Map<string, string>();

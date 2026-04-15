@@ -77,7 +77,7 @@ export function getFirebaseFirestore(): Firestore {
   return firestoreInstance;
 }
 
-/** Login Google vindo do app Mac (ASWebAuthenticationSession + PKCE), fora do WKWebView. */
+/** Login Google vindo do app Brain2 Mac/iOS (ASWebAuthenticationSession + PKCE), fora do WKWebView. */
 export async function signInWithGoogleNativeIdToken(
   idToken: string,
   accessToken?: string | null
