@@ -2,6 +2,10 @@
  * Memórias próprias do assistente (ANCC): conclusões inferidas, não factos do utilizador.
  * Persistência principal: localStorage (sempre); opcional: ficheiros em `_Brain2/ANCC_Model_Memory/`
  * no vault preset (API). Não entram no grafo «Your Brain» (ver `buildGraphFromVault`).
+ *
+ * O **nome de exibição do assistente** escolhido pelo utilizador vive também neste estado
+ * (`assistantDisplayName`): é a cópia canónica nas «memórias Brain2» (ANCC), mantida em sincronia
+ * por `userAssistantIdentity.ts` — válida até o utilizador a alterar explicitamente.
  */
 
 import type { InteractionOutcome } from "@/ancc/models/metadata";
@@ -32,7 +36,32 @@ export type ModelMemoryEntry = {
 export type ModelMemoryState = {
   version: 1;
   entries: ModelMemoryEntry[];
+  /**
+   * Nome de exibição que o utilizador definiu para o assistente (única fonte de verdade em conjunto
+   * com `userAssistantIdentity` — gravado aqui para constar nas memórias ANCC e sobreviver a merges).
+   */
+  assistantDisplayName?: string;
+  /** ISO 8601 — última vez que o utilizador fixou ou alterou o nome. */
+  assistantDisplayNameUpdatedAt?: string;
 };
+
+const ASSISTANT_NAME_MAX_LOAD = 64;
+
+/** Preserva metadados do estado (nome do assistente) ao substituir só a lista de entradas. */
+function modelMemoryStateWithEntries(
+  state: ModelMemoryState,
+  entries: ModelMemoryEntry[],
+): ModelMemoryState {
+  const next: ModelMemoryState = { version: 1, entries };
+  const n = state.assistantDisplayName?.trim();
+  if (n) {
+    next.assistantDisplayName = n.slice(0, ASSISTANT_NAME_MAX_LOAD);
+    if (state.assistantDisplayNameUpdatedAt?.trim()) {
+      next.assistantDisplayNameUpdatedAt = state.assistantDisplayNameUpdatedAt;
+    }
+  }
+  return next;
+}
 
 const LS_KEY = "brain2-ancc-model-memory-v1";
 
@@ -52,7 +81,17 @@ export function loadModelMemoryState(): ModelMemoryState {
     if (!parsed || typeof parsed !== "object") return { version: 1, entries: [] };
     const s = parsed as Partial<ModelMemoryState>;
     if (s.version !== 1 || !Array.isArray(s.entries)) return { version: 1, entries: [] };
-    return { version: 1, entries: s.entries.filter(isValidEntry) };
+    const entries = s.entries.filter(isValidEntry);
+    const base: ModelMemoryState = { version: 1, entries };
+    const rawName = s.assistantDisplayName;
+    if (typeof rawName === "string" && rawName.trim().length > 0) {
+      base.assistantDisplayName = rawName.trim().slice(0, ASSISTANT_NAME_MAX_LOAD);
+      const u = s.assistantDisplayNameUpdatedAt;
+      if (typeof u === "string" && u.trim().length > 0) {
+        base.assistantDisplayNameUpdatedAt = u.trim();
+      }
+    }
+    return base;
   } catch {
     return { version: 1, entries: [] };
   }
@@ -80,6 +119,11 @@ export function saveModelMemoryState(state: ModelMemoryState): void {
 
 /** Texto compacto para o contexto ANCC (próximo turno). */
 export function formatModelMemoryForAnccContext(state: ModelMemoryState, maxChars = 900): string {
+  const stableName = state.assistantDisplayName?.trim();
+  const head = stableName
+    ? `[Stable user preference — assistant display name: ${stableName.slice(0, ASSISTANT_NAME_MAX_LOAD)}]\n`
+    : "";
+
   const active = state.entries
     .filter((e) => e.userVerdict !== "rejected")
     .slice(-12)
@@ -94,8 +138,10 @@ export function formatModelMemoryForAnccContext(state: ModelMemoryState, maxChar
       return `- ${e.summary.slice(0, 220)} ${v} [${topics}] conf~${e.confidence.toFixed(2)}`;
     })
     .join("\n");
-  if (!active.trim()) return "";
-  return active.length > maxChars ? `${active.slice(0, maxChars)}…` : active;
+
+  const combined = `${head}${active}`.trim();
+  if (!combined) return "";
+  return combined.length > maxChars ? `${combined.slice(0, maxChars)}…` : combined;
 }
 
 const CHALLENGE_RE =
@@ -130,7 +176,7 @@ export function applyUserMessageToModelMemories(
       : e
   );
 
-  return { ...state, entries };
+  return modelMemoryStateWithEntries(state, entries);
 }
 
 function summarizeAssistant(text: string, maxLen = 320): string {
@@ -219,7 +265,7 @@ export function integrateFinalizeIntoModelMemory(opts: {
         : finalized.assistantTopics.slice(0, 8)
     ).filter(Boolean);
     if (topics.length === 0) {
-      return { state: { version: 1, entries }, newEntry: null };
+      return { state: modelMemoryStateWithEntries(state, entries), newEntry: null };
     }
     const confidence =
       typeof firstStructured.confidence === "number"
@@ -237,16 +283,16 @@ export function integrateFinalizeIntoModelMemory(opts: {
       userVerdict: "pending",
     };
     entries = [...entries, newEntry].slice(-80);
-    return { state: { version: 1, entries }, newEntry };
+    return { state: modelMemoryStateWithEntries(state, entries), newEntry };
   }
 
   if (!shouldAddHeuristic) {
-    return { state: { version: 1, entries }, newEntry: null };
+    return { state: modelMemoryStateWithEntries(state, entries), newEntry: null };
   }
 
   const topics = finalized.assistantTopics.slice(0, 8).filter(Boolean);
   if (topics.length === 0) {
-    return { state: { version: 1, entries }, newEntry: null };
+    return { state: modelMemoryStateWithEntries(state, entries), newEntry: null };
   }
   const summary = summarizeAssistant(assistantMessage);
   const confidence = heuristicConfidence(finalized, topics.length);
@@ -264,7 +310,7 @@ export function integrateFinalizeIntoModelMemory(opts: {
   newEntry = entry;
   entries = [...entries, entry].slice(-80);
 
-  return { state: { version: 1, entries }, newEntry };
+  return { state: modelMemoryStateWithEntries(state, entries), newEntry };
 }
 
 export function formatModelMemoryMarkdown(entry: ModelMemoryEntry): string {

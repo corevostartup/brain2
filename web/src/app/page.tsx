@@ -2295,6 +2295,7 @@ export default function Home() {
         <InputBar
           desktopSidebarOffset={!isSidebarHidden}
           isSending={chatLoading}
+          assistantDisplayName={userAssistantDisplayName}
           onSend={handleSendToBrain}
           onOpenAdvancedVoice={handleOpenAdvancedVoice}
         />

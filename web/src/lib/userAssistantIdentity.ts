@@ -1,10 +1,23 @@
 /**
- * Nome / identidade de exibição escolhida pelo utilizador para o assistente (regra persistente no cliente).
+ * Nome / identidade de exibição escolhida pelo utilizador para o assistente.
+ *
+ * **Armazenamento canónico:** o valor válido é guardado em `ModelMemoryState` (localStorage
+ * `brain2-ancc-model-memory-v1`), campos `assistantDisplayName` e `assistantDisplayNameUpdatedAt`,
+ * via `saveUserAssistantDisplayName` — o mesmo blob das memórias ANCC do Brain2. Assim o nome
+ * acompanha o pacote de «memórias do modelo» e é aplicado em cada turno até o utilizador mudar.
+ *
+ * A chave `USER_ASSISTANT_DISPLAY_NAME_STORAGE_KEY` é só legado: na primeira leitura migra para o
+ * estado ANCC e é removida.
  */
+
+import { loadModelMemoryState, saveModelMemoryState } from "@/lib/anccModelMemory";
 
 export const USER_ASSISTANT_DISPLAY_NAME_STORAGE_KEY = "brain2-user-assistant-display-name";
 
-const MAX_NAME_LEN = 64;
+/** Manter alinhado com o truncamento em `anccModelMemory` (ASSISTANT_NAME_MAX_LOAD). */
+export const USER_ASSISTANT_DISPLAY_NAME_MAX_LEN = 64;
+
+const MAX_NAME_LEN = USER_ASSISTANT_DISPLAY_NAME_MAX_LEN;
 
 function stripOuterQuotes(s: string): string {
   return s.replace(/^[\s"'«»“”]+|[\s"'«»“”]+$/g, "").trim();
@@ -104,8 +117,27 @@ export function tryParseAssistantRenameFromUserMessage(text: string): string | n
 export function loadUserAssistantDisplayName(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    const v = window.localStorage.getItem(USER_ASSISTANT_DISPLAY_NAME_STORAGE_KEY)?.trim();
-    return v && v.length > 0 ? v.slice(0, MAX_NAME_LEN) : null;
+    const mm = loadModelMemoryState();
+    const fromAncc = mm.assistantDisplayName?.trim();
+    if (fromAncc) {
+      return fromAncc.slice(0, MAX_NAME_LEN);
+    }
+
+    const legacy = window.localStorage.getItem(USER_ASSISTANT_DISPLAY_NAME_STORAGE_KEY)?.trim();
+    if (!legacy) {
+      return null;
+    }
+
+    const migrated = legacy.slice(0, MAX_NAME_LEN);
+    saveModelMemoryState({
+      ...mm,
+      version: 1,
+      entries: mm.entries,
+      assistantDisplayName: migrated,
+      assistantDisplayNameUpdatedAt: new Date().toISOString(),
+    });
+    window.localStorage.removeItem(USER_ASSISTANT_DISPLAY_NAME_STORAGE_KEY);
+    return migrated;
   } catch {
     return null;
   }
@@ -114,11 +146,21 @@ export function loadUserAssistantDisplayName(): string | null {
 export function saveUserAssistantDisplayName(name: string | null): void {
   if (typeof window === "undefined") return;
   try {
+    const mm = loadModelMemoryState();
     if (!name || !name.trim()) {
+      saveModelMemoryState({ version: 1, entries: mm.entries });
       window.localStorage.removeItem(USER_ASSISTANT_DISPLAY_NAME_STORAGE_KEY);
       return;
     }
-    window.localStorage.setItem(USER_ASSISTANT_DISPLAY_NAME_STORAGE_KEY, name.trim().slice(0, MAX_NAME_LEN));
+    const trimmed = name.trim().slice(0, MAX_NAME_LEN);
+    saveModelMemoryState({
+      ...mm,
+      version: 1,
+      entries: mm.entries,
+      assistantDisplayName: trimmed,
+      assistantDisplayNameUpdatedAt: new Date().toISOString(),
+    });
+    window.localStorage.removeItem(USER_ASSISTANT_DISPLAY_NAME_STORAGE_KEY);
   } catch {
     /* ignore quota */
   }

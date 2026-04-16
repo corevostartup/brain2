@@ -54,6 +54,7 @@ function isBrain2NativeShell(): boolean {
 type InputBarProps = {
   desktopSidebarOffset?: boolean;
   isSending?: boolean;
+  assistantDisplayName?: string | null;
   onSend?: (payload: { content: string; model: string; apiKey: string }) => Promise<void>;
   onOpenAdvancedVoice?: () => void;
 };
@@ -61,6 +62,7 @@ type InputBarProps = {
 export default function InputBar({
   desktopSidebarOffset = false,
   isSending = false,
+  assistantDisplayName: assistantDisplayNameProp,
   onSend,
   onOpenAdvancedVoice,
 }: InputBarProps) {
@@ -336,7 +338,11 @@ export default function InputBar({
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder={isDictating ? "À escuta… fale para transcrever." : "Pergunte ao Brain2…"}
+            placeholder={
+              isDictating
+                ? "À escuta… fale para transcrever."
+                : `Pergunte a ${assistantDisplayNameProp?.trim() ? assistantDisplayNameProp.trim() : "Brain2"}…`
+            }
             rows={1}
             spellCheck={false}
             aria-label="Mensagem"

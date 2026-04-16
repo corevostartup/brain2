@@ -23,6 +23,14 @@ import {
 import { transcribeAudioBlobWithOpenAI } from "@/lib/whisperTranscribe";
 import type { VaultGraph } from "@/lib/vault";
 
+/** Cópia defensiva — referência estável para o BrainGraphView não reiniciar a física quando o vault refresca. */
+function cloneVaultGraph(g: VaultGraph): VaultGraph {
+  return {
+    nodes: g.nodes.map((n) => ({ ...n })),
+    edges: g.edges.map((e) => ({ ...e })),
+  };
+}
+
 type AdvancedVoiceSphereViewProps = {
   onClose: () => void;
   vaultGraph?: VaultGraph | null;
@@ -167,6 +175,12 @@ export default function AdvancedVoiceSphereView({
   const [liveTranscript, setLiveTranscript] = useState("");
   /** Transcrição com debounce só para o grafo — evita “refresh” da simulação a cada token do STT. */
   const [transcriptForGraph, setTranscriptForGraph] = useState("");
+  /**
+   * Snapshot do grafo na 1.ª vez que o vault deixa de carregar — mantém referência e topologia fixas
+   * durante toda a sessão de conversa avançada (evita reinício da simulação quando `vaultGraph` do pai
+   * é recalculado após guardar conversa / refrescar o vault).
+   */
+  const [pinnedVaultGraph, setPinnedVaultGraph] = useState<VaultGraph | undefined>(undefined);
   const [sttHint, setSttHint] = useState<string | null>(null);
   const [speechPulsePhase, setSpeechPulsePhase] = useState(0);
   const [localSubmitError, setLocalSubmitError] = useState<string | null>(null);
@@ -231,6 +245,12 @@ export default function AdvancedVoiceSphereView({
       cancelAllAssistantSpeech();
     };
   }, []);
+
+  useEffect(() => {
+    if (pinnedVaultGraph !== undefined) return;
+    if (vaultGraphLoading) return;
+    setPinnedVaultGraph(vaultGraph == null ? { nodes: [], edges: [] } : cloneVaultGraph(vaultGraph));
+  }, [vaultGraph, vaultGraphLoading, pinnedVaultGraph]);
 
   /** Safari / WebKit: primeiro toque no ecrã desbloqueia áudio para `HTMLAudioElement.play()` (TTS OpenAI). */
   useLayoutEffect(() => {
@@ -1038,6 +1058,10 @@ export default function AdvancedVoiceSphereView({
 
   const nativeShell = isBrain2NativeShell();
 
+  const graphForBrain: VaultGraph | null =
+    pinnedVaultGraph !== undefined ? pinnedVaultGraph : (vaultGraph ?? null);
+  const graphLoadingForBrain = pinnedVaultGraph !== undefined ? false : vaultGraphLoading;
+
   return (
     <div
       ref={advancedVoiceRootRef}
@@ -1060,8 +1084,8 @@ export default function AdvancedVoiceSphereView({
       <div className="advanced-voice-brain-layer">
         <BrainGraphView
           onClose={noop}
-          graph={vaultGraph ?? null}
-          loading={vaultGraphLoading}
+          graph={graphForBrain}
+          loading={graphLoadingForBrain}
           variant="spectator"
           compactChrome
           hideCloseButton
