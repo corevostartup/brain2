@@ -66,6 +66,7 @@ export default function InputBar({
   onSend,
   onOpenAdvancedVoice,
 }: InputBarProps) {
+  const [nativeShell, setNativeShell] = useState(false);
   const [value, setValue] = useState("");
   const [activeMode, setActiveMode] = useState<Mode>("Ask");
   const [activeContextMode, setActiveContextMode] = useState<ContextMode>("Local");
@@ -87,6 +88,13 @@ export default function InputBar({
   useEffect(() => {
     valueRef.current = value;
   }, [value]);
+
+  useEffect(() => {
+    const sync = () => setNativeShell(isBrain2NativeShell());
+    sync();
+    window.addEventListener("brain2-native-bridge-ready", sync);
+    return () => window.removeEventListener("brain2-native-bridge-ready", sync);
+  }, []);
 
   const stopDictation = useCallback(() => {
     if (stopDictationRef.current) {
@@ -291,7 +299,9 @@ export default function InputBar({
   return (
     <>
       <div
-        className={`input-bar-wrapper${desktopSidebarOffset ? " input-bar-wrapper--with-sidebar" : ""}`}
+        className={`input-bar-wrapper${desktopSidebarOffset ? " input-bar-wrapper--with-sidebar" : ""}${
+          nativeShell ? " input-bar-wrapper--native-shell" : ""
+        }`}
       >
         <div className="input-bar">
         {/* ── Desktop: single row ── */}
@@ -485,13 +495,15 @@ export default function InputBar({
       <style jsx>{`
         .input-bar-wrapper {
           position: fixed;
-          bottom: env(safe-area-inset-bottom);
+          bottom: 0;
           left: 0;
           right: 0;
           display: flex;
           justify-content: center;
           width: 100vw;
-          padding: 44px 16px max(28px, env(safe-area-inset-bottom));
+          /* Rodapé ancorado: safe-area no padding inferior (home indicator). constant() = iOS legado. */
+          padding: 18px 16px calc(14px + constant(safe-area-inset-bottom));
+          padding: 18px 16px calc(14px + env(safe-area-inset-bottom, 0px));
           background: linear-gradient(
             to top,
             rgba(12, 12, 12, 1) 68%,
@@ -501,6 +513,18 @@ export default function InputBar({
           pointer-events: none;
           z-index: 1000;
           transition: bottom 0.15s ease-out;
+        }
+
+        /* WKWebView (iOS/macOS shell): menos “colchão” superior — evita parecer que o footer subiu. */
+        .input-bar-wrapper--native-shell {
+          padding: 10px 16px calc(12px + constant(safe-area-inset-bottom));
+          padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+          background: linear-gradient(
+            to top,
+            rgba(12, 12, 12, 1) 58%,
+            rgba(12, 12, 12, 0.5) 78%,
+            rgba(12, 12, 12, 0)
+          );
         }
 
         :global(html[data-theme="light"]) .input-bar-wrapper,
@@ -515,7 +539,8 @@ export default function InputBar({
 
         @media (min-width: 980px) {
           .input-bar-wrapper {
-            padding: 56px 16px max(28px, env(safe-area-inset-bottom));
+            padding: 28px 16px calc(18px + constant(safe-area-inset-bottom));
+            padding: 28px 16px calc(18px + env(safe-area-inset-bottom, 0px));
             background: linear-gradient(
               to top,
               rgba(12, 12, 12, 1) 62%,
@@ -918,7 +943,13 @@ export default function InputBar({
         /* ── Mobile ── */
         @media (max-width: 600px) {
           .input-bar-wrapper {
-            padding: 26px 12px 24px;
+            padding: 14px 12px calc(12px + constant(safe-area-inset-bottom));
+            padding: 14px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+          }
+
+          .input-bar-wrapper--native-shell {
+            padding: 8px 12px calc(10px + constant(safe-area-inset-bottom));
+            padding: 8px 12px calc(10px + env(safe-area-inset-bottom, 0px));
           }
 
           .hidden-mobile {

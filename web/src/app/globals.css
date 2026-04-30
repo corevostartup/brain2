@@ -118,14 +118,17 @@ button:focus {
  * App macOS (WKWebView): 100dvh costuma ser maior que a area do WebView; o layout quebra
  * (sidebar, grafo Your Brain, botao lateral). Forcamos cadeia em % em relacao ao WKWebView.
  */
-html[data-brain2-native],
-html[data-brain2-native] body {
+html[data-brain2-native] {
   height: 100% !important;
-  min-height: 0 !important;
+  /* iOS WKWebView: alinha a altura do documento à área real do WebView. */
+  min-height: -webkit-fill-available !important;
   max-height: 100% !important;
 }
 
 html[data-brain2-native] body {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
   display: flex;
   flex-direction: column;
 }
@@ -136,4 +139,7 @@ html[data-brain2-native] [role="main"] {
   min-height: 0 !important;
   max-height: 100% !important;
   flex: 1 1 auto !important;
+  /* Conteúdo principal respeita o notch; o rodapé fixo trata o home indicator em CSS. */
+  padding-top: env(safe-area-inset-top, 0px);
+  box-sizing: border-box !important;
 }

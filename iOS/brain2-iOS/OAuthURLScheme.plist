@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>O Brain2 usa o microfone na conversa avançada para ouvir e transcrever a sua voz.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>O Brain2 usa o reconhecimento de voz do sistema para converter a sua fala em texto na conversa avançada.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

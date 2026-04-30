@@ -54,12 +54,20 @@ struct Brain2WebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: Coordinator.messageHandlerName)
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
 
         let webView = WKWebView(frame: .zero, configuration: config)
 
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
         webView.scrollView.bouncesZoom = false
+        /// Sem isto, o iOS aplica insets de safe area ao `UIScrollView` do WKWebView e o layout CSS
+        /// (especialmente `position: fixed` no rodapé) fica desalinhado em relação ao ecrã real.
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.automaticallyAdjustsScrollIndicatorInsets = false
+        webView.scrollView.contentInset = .zero
+        webView.scrollView.scrollIndicatorInsets = .zero
         webView.isOpaque = false
         webView.backgroundColor = UIColor(red: 12 / 255, green: 12 / 255, blue: 12 / 255, alpha: 1)
         webView.allowsBackForwardNavigationGestures = false
@@ -82,6 +90,7 @@ struct Brain2WebView: UIViewRepresentable {
 
         context.coordinator.webView = webView
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         context.coordinator.pendingTokens = pendingGoogleTokens
 
         loadURL(in: webView)
@@ -139,7 +148,7 @@ struct Brain2WebView: UIViewRepresentable {
         webView.load(URLRequest(url: url))
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler, UIDocumentPickerDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UIDocumentPickerDelegate {
         static let messageHandlerName = "brain2Native"
         private static let selectedVaultPathDefaultsKey = "brain2-ios-selected-vault-path"
         private static let selectedVaultBookmarkDefaultsKey = "brain2-ios-selected-vault-bookmark"
@@ -173,6 +182,20 @@ struct Brain2WebView: UIViewRepresentable {
 
             if type == "pickDirectory" {
                 presentDirectoryPicker()
+                return
+            }
+
+            if type == "saveConversation" {
+                if let payload = body["payload"] as? [String: Any] {
+                    saveConversationToVault(payload)
+                }
+                return
+            }
+
+            if type == "saveAnccModelMemory" {
+                if let payload = body["payload"] as? [String: Any] {
+                    saveAnccModelMemoryToVault(payload)
+                }
             }
         }
 
@@ -181,6 +204,25 @@ struct Brain2WebView: UIViewRepresentable {
             publishPersistedVaultSelectionIfAvailable()
             if let tokens = pendingTokens {
                 dispatchTokensIfNeeded(idToken: tokens.idToken, accessToken: tokens.accessToken)
+            }
+        }
+
+        /// iOS 15+: sem delegar isto, `getUserMedia` / reconhecimento de voz na página podem falhar no WKWebView.
+        @available(iOS 15.0, *)
+        func webView(
+            _ webView: WKWebView,
+            requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+            initiatedByFrame frame: WKFrameInfo,
+            type: WKMediaCaptureType,
+            decisionHandler: @escaping (WKPermissionDecision) -> Void
+        ) {
+            switch type {
+            case .microphone, .cameraAndMicrophone:
+                decisionHandler(.grant)
+            case .camera:
+                decisionHandler(.deny)
+            @unknown default:
+                decisionHandler(.deny)
             }
         }
 
@@ -201,10 +243,162 @@ struct Brain2WebView: UIViewRepresentable {
                   window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'pickDirectory' });
                 } catch (e) {}
               };
+              window.Brain2Native.saveConversation = function (payload) {
+                try {
+                  window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'saveConversation', payload: payload || {} });
+                } catch (e) {}
+              };
+              window.Brain2Native.saveAnccModelMemory = function (payload) {
+                try {
+                  window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'saveAnccModelMemory', payload: payload || {} });
+                } catch (e) {}
+              };
               window.dispatchEvent(new CustomEvent('brain2-native-bridge-ready'));
             })();
             """
             webView?.evaluateJavaScript(script, completionHandler: nil)
+        }
+
+        private func saveConversationToVault(_ payload: [String: Any]) {
+            guard let vaultURL = resolvePersistedVaultURL() else { return }
+            guard
+                let markdown = payload["markdown"] as? String,
+                !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return
+            }
+
+            let conversationID = (payload["conversationId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawTitle = (payload["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawFolderPath = (payload["folderPath"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+                let didAccess = vaultURL.startAccessingSecurityScopedResource()
+                defer {
+                    if didAccess {
+                        vaultURL.stopAccessingSecurityScopedResource()
+                    }
+                }
+
+                let fallbackFolderURL = vaultURL.appendingPathComponent("Memories", isDirectory: true)
+                let normalizedFolderPath = self.normalizeRelativeFolderPath(rawFolderPath)
+                let folderURL = self.resolveTargetFolderURL(
+                    normalizedFolderPath: normalizedFolderPath,
+                    vaultURL: vaultURL,
+                    fallbackURL: fallbackFolderURL
+                )
+
+                do {
+                    try self.fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
+                    let safeConversationID = self.sanitizeFileName(conversationID ?? "chat-\(Int(Date().timeIntervalSince1970))")
+                    let formattedTitle = self.formatConversationFileTitle(rawTitle ?? "conversation")
+                    let filename = "\(formattedTitle) - (\(safeConversationID)).md"
+                    let fileURL = folderURL.appendingPathComponent(filename)
+                    try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+                } catch {
+                    return
+                }
+
+                self.publishVaultSelection(for: vaultURL)
+            }
+        }
+
+        private func saveAnccModelMemoryToVault(_ payload: [String: Any]) {
+            guard let vaultURL = resolvePersistedVaultURL() else { return }
+            guard
+                let markdown = payload["markdown"] as? String,
+                !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return
+            }
+
+            let rawBase = (payload["fileBase"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "memory"
+            let safeBase = sanitizeFileName(rawBase)
+
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+                let didAccess = vaultURL.startAccessingSecurityScopedResource()
+                defer {
+                    if didAccess {
+                        vaultURL.stopAccessingSecurityScopedResource()
+                    }
+                }
+
+                do {
+                    let folderURL = vaultURL
+                        .appendingPathComponent("_Brain2", isDirectory: true)
+                        .appendingPathComponent("ANCC_Model_Memory", isDirectory: true)
+                    try self.fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
+                    let fileURL = folderURL.appendingPathComponent("\(safeBase).md")
+                    try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+                } catch {
+                    return
+                }
+
+                self.publishVaultSelection(for: vaultURL)
+            }
+        }
+
+        private func sanitizeFileName(_ raw: String) -> String {
+            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+            let mapped = raw.lowercased().unicodeScalars.map { scalar -> Character in
+                allowed.contains(scalar) ? Character(scalar) : "-"
+            }
+            let compact = String(mapped)
+                .replacingOccurrences(of: "--+", with: "-", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            return compact.isEmpty ? "conversation" : compact
+        }
+
+        private func formatConversationFileTitle(_ raw: String) -> String {
+            let cleaned = raw
+                .replacingOccurrences(of: "[._-]+", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "[\\\\/:*?\"<>|]+", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return "Conversation" }
+            return cleaned
+                .split(separator: " ")
+                .map { token in
+                    let lower = token.lowercased()
+                    guard let first = lower.first else { return "" }
+                    return String(first).uppercased() + lower.dropFirst()
+                }
+                .joined(separator: " ")
+        }
+
+        private func normalizeRelativeFolderPath(_ rawPath: String?) -> String? {
+            guard let rawPath else { return nil }
+            let normalized = rawPath
+                .replacingOccurrences(of: "\\\\", with: "/")
+                .split(separator: "/")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
+                .joined(separator: "/")
+            return normalized.isEmpty ? nil : normalized
+        }
+
+        private func resolveTargetFolderURL(
+            normalizedFolderPath: String?,
+            vaultURL: URL,
+            fallbackURL: URL
+        ) -> URL {
+            guard let normalizedFolderPath, !normalizedFolderPath.isEmpty else {
+                return fallbackURL
+            }
+
+            var targetURL = vaultURL
+            for component in normalizedFolderPath.split(separator: "/") {
+                targetURL.appendPathComponent(String(component), isDirectory: true)
+            }
+
+            let rootPath = vaultURL.standardizedFileURL.path
+            let targetPath = targetURL.standardizedFileURL.path
+            guard targetPath == rootPath || targetPath.hasPrefix(rootPath + "/") else {
+                return fallbackURL
+            }
+            return targetURL
         }
 
         func publishSignInErrorToWeb(_ message: String) {
