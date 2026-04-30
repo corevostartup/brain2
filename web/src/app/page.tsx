@@ -26,6 +26,7 @@ import {
 import AdvancedVoiceSphereView from "@/components/AdvancedVoiceSphereView";
 import { PanelLeftOpen } from "lucide-react";
 import {
+  formatConversationDisplayTitle,
   type VaultConversation,
   type VaultGraph,
   type FolderTreeNode,
