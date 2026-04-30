@@ -4,10 +4,10 @@
 //
 
 import SwiftUI
+import GoogleSignIn
 
 /// Query `brain2-shell` alinha com `page.tsx` (sessionStorage shell nativa, igual ao macOS).
 private let brain2WebURL = "https://brain2corevo.netlify.app/?brain2-shell=macos"
-private let appChromeBackground = Color(red: 12 / 255, green: 12 / 255, blue: 12 / 255)
 
 struct ContentView: View {
     /// `false` = ecrã nativo de boas-vindas; `true` = shell nativo com WKWebView (fluxo nativo completo).
@@ -21,15 +21,6 @@ struct ContentView: View {
 
     private let oauthController = GoogleOAuthSignInController()
 
-    private var isOAuthConfigured: Bool {
-        !NativeOAuthSecrets.googleOAuthClientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var configurationHint: String? {
-        guard !isOAuthConfigured else { return nil }
-        return "Adicione o ID cliente Web do Firebase em NativeOAuthSecrets.Local.swift e registe brain2auth://oauth-callback na Google Cloud."
-    }
-
     var body: some View {
         ZStack {
             Group {
@@ -41,17 +32,12 @@ struct ContentView: View {
                         onTokensDelivered: {
                             pendingBootstrapTokens = nil
                         },
-                        onOpenWelcome: {
-                            shellUnlocked = false
-                        },
-                        onGoogleSignIn: { startGoogleOAuth(preferWebError: true) },
-                        oauthConfigured: isOAuthConfigured,
-                        oauthBusy: oauthBusy
+                        onGoogleSignIn: { startGoogleOAuth(preferWebError: true) }
                     )
                 } else {
                     IOSGoogleSignInScreen(
                         isBusy: oauthBusy,
-                        configurationError: configurationHint,
+                        configurationError: nil,
                         onGoogleSignIn: { startGoogleOAuth(preferWebError: false) },
                         onContinueToWeb: {
                             shellUnlocked = true
@@ -76,11 +62,12 @@ struct ContentView: View {
         }, message: {
             Text(oauthAlertMessage ?? "")
         })
+        .onOpenURL { url in
+            _ = oauthController.handle(url)
+        }
     }
 
     private func startGoogleOAuth(preferWebError: Bool) {
-        guard isOAuthConfigured else { return }
-
         oauthBusy = true
         oauthController.startGoogleSignIn { result in
             oauthBusy = false
@@ -116,50 +103,17 @@ private struct Brain2NativeShellView: View {
     @Binding var pendingTokens: Brain2WebView.PendingGoogleTokens?
     @Binding var webOAuthErrorMessage: String?
     let onTokensDelivered: () -> Void
-    let onOpenWelcome: () -> Void
     let onGoogleSignIn: () -> Void
-    let oauthConfigured: Bool
-    let oauthBusy: Bool
 
     var body: some View {
-        NavigationStack {
-            Brain2WebView(
-                urlString: urlString,
-                pendingGoogleTokens: pendingTokens,
-                onTokensDelivered: onTokensDelivered,
-                onStartGoogleSignInFromWeb: onGoogleSignIn,
-                webOAuthErrorMessage: $webOAuthErrorMessage
-            )
-            .ignoresSafeArea(edges: .bottom)
-            .navigationTitle("Brain2")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(appChromeBackground, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            onGoogleSignIn()
-                        } label: {
-                            Label("Iniciar sessão com Google", systemImage: "person.badge.key")
-                        }
-                        .disabled(!oauthConfigured || oauthBusy)
-
-                        Button(role: .none) {
-                            onOpenWelcome()
-                        } label: {
-                            Label("Ecrã inicial", systemImage: "arrow.backward.circle")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.body.weight(.medium))
-                            .accessibilityLabel("Menu da conta")
-                    }
-                }
-            }
-        }
-        .tint(.white)
+        Brain2WebView(
+            urlString: urlString,
+            pendingGoogleTokens: pendingTokens,
+            onTokensDelivered: onTokensDelivered,
+            onStartGoogleSignInFromWeb: onGoogleSignIn,
+            webOAuthErrorMessage: $webOAuthErrorMessage
+        )
+        .ignoresSafeArea()
     }
 }
 

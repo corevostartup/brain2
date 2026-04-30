@@ -475,6 +475,12 @@ struct WebView: NSViewRepresentable {
                 return
             }
 
+            if type == "deleteConversation" {
+                let deletePayload = payload["payload"] as? [String: Any] ?? [:]
+                deleteConversationFromWebPayload(deletePayload)
+                return
+            }
+
             if type == "saveLlmConfig" {
                 let llmPayload = payload["payload"] as? [String: Any] ?? [:]
                 saveLlmConfig(llmPayload)
@@ -852,6 +858,11 @@ struct WebView: NSViewRepresentable {
             window.Brain2Native.renameFolder = function (payload) {
               try {
                 window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'renameFolder', payload: payload || {} });
+              } catch (_) {}
+            };
+            window.Brain2Native.deleteConversation = function (payload) {
+              try {
+                window.webkit.messageHandlers.\(Self.messageHandlerName).postMessage({ type: 'deleteConversation', payload: payload || {} });
               } catch (_) {}
             };
             window.Brain2Native.saveConversation = function (payload) {
@@ -1616,6 +1627,271 @@ struct WebView: NSViewRepresentable {
             }
         }
 
+        private func publishConversationDeleteResult(success: Bool, errorMessage: String?) {
+            var payload: [String: Any] = ["success": success]
+            if let errorMessage, !errorMessage.isEmpty {
+                payload["error"] = errorMessage
+            }
+
+            guard JSONSerialization.isValidJSONObject(payload) else { return }
+            guard
+                let payloadData = try? JSONSerialization.data(withJSONObject: payload),
+                let payloadJSON = String(data: payloadData, encoding: .utf8)
+            else {
+                return
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                let script = """
+                window.dispatchEvent(new CustomEvent('brain2-native-conversation-delete-result', { detail: \(payloadJSON) }));
+                """
+                self?.webView?.evaluateJavaScript(script, completionHandler: nil)
+            }
+        }
+
+        private func deleteConversationFromWebPayload(_ payload: [String: Any]) {
+            guard let rawPath = payload["conversationPath"] as? String else {
+                publishConversationDeleteResult(success: false, errorMessage: "Caminho da conversa invalido.")
+                return
+            }
+            let conversationPath = rawPath
+                .replacingOccurrences(of: "\\", with: "/")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !conversationPath.isEmpty else {
+                publishConversationDeleteResult(success: false, errorMessage: "Caminho da conversa invalido.")
+                return
+            }
+
+            guard let vaultURL = resolvePersistedVaultURL() else {
+                publishConversationDeleteResult(
+                    success: false,
+                    errorMessage: "Nenhum vault local selecionado. Abra Configuracoes e escolha a pasta."
+                )
+                return
+            }
+
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else { return }
+
+                self.withSecurityScopedAccess(to: vaultURL) {
+                    do {
+                        try self.performDeleteConversationWithRewire(vaultRootURL: vaultURL, relativeConversationPath: conversationPath)
+                        DispatchQueue.main.async {
+                            self.publishVaultSelection(for: vaultURL) {
+                                self.publishConversationDeleteResult(success: true, errorMessage: nil)
+                            }
+                        }
+                    } catch {
+                        DispatchQueue.main.async {
+                            self.publishConversationDeleteResult(success: false, errorMessage: error.localizedDescription)
+                        }
+                    }
+                }
+            }
+        }
+
+        private func isAnccModelMemoryVaultPath(_ relativePath: String) -> Bool {
+            let p = relativePath.replacingOccurrences(of: "\\", with: "/").lowercased()
+            return p.contains("_brain2/ancc_model_memory/") || p.hasSuffix("/_brain2/ancc_model_memory")
+        }
+
+        private func graphNeighborIds(of deletedNorm: String, usable: [MarkdownFile]) -> Set<String> {
+            var neighbors = Set<String>()
+            for file in usable {
+                let source = normalizeGraphPathKey(file.path)
+                let bodyForLinks = stripYamlFrontmatter(from: file.content)
+                for link in parseWikilinks(from: bodyForLinks) {
+                    if let target = resolveWikilinkToFilePath(linkText: link, in: usable) {
+                        if source == deletedNorm {
+                            neighbors.insert(target)
+                        } else if target == deletedNorm {
+                            neighbors.insert(source)
+                        }
+                    }
+                }
+                for raw in extractRelatedVaultPaths(from: file.content) {
+                    let target = normalizeGraphPathKey(raw)
+                    if source == deletedNorm {
+                        neighbors.insert(target)
+                    } else if target == deletedNorm {
+                        neighbors.insert(source)
+                    }
+                }
+            }
+            neighbors.remove(deletedNorm)
+            return neighbors
+        }
+
+        private func stripVaultPathLinesToDeleted(from content: String, deletedNorm: String) -> String {
+            let lines = content.components(separatedBy: .newlines)
+            let kept: [String] = lines.compactMap { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("vault_path:") {
+                    if let path = extractQuotedPathFromVaultPathLine(trimmed),
+                       normalizeGraphPathKey(path) == deletedNorm {
+                        return nil
+                    }
+                }
+                return line
+            }
+            return kept.joined(separator: "\n")
+        }
+
+        private func extractQuotedPathFromVaultPathLine(_ line: String) -> String? {
+            guard let range = line.range(of: "vault_path:") else { return nil }
+            let after = line[range.upperBound...].trimmingCharacters(in: .whitespaces)
+            guard after.first == "\"" else { return nil }
+            let rest = after.dropFirst()
+            guard let endQuote = rest.firstIndex(of: "\"") else { return nil }
+            return String(rest[..<endQuote])
+                .replacingOccurrences(of: "\\", with: "/")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        private func removeWikilinksResolvingToTarget(
+            from content: String,
+            deletedNorm: String,
+            files: [MarkdownFile]
+        ) -> String {
+            guard let wikilinkRegex else { return content }
+            let ns = content as NSString
+            let fullRange = NSRange(location: 0, length: ns.length)
+            let matches = wikilinkRegex.matches(in: content, options: [], range: fullRange)
+            var removals: [(Int, Int)] = []
+            for match in matches {
+                guard match.numberOfRanges > 1 else { continue }
+                let linkText = ns.substring(with: match.range(at: 1))
+                if let resolved = resolveWikilinkToFilePath(linkText: linkText, in: files),
+                   resolved == deletedNorm {
+                    removals.append((match.range.location, match.range.length))
+                }
+            }
+            var result = content
+            for (start, len) in removals.reversed() {
+                let nsResult = result as NSString
+                let before = nsResult.substring(to: start)
+                let after = nsResult.substring(from: start + len)
+                result = before + after
+            }
+            return result
+        }
+
+        private func markdownLinksToNormalizedTarget(
+            _ markdown: String,
+            targetNorm: String,
+            files: [MarkdownFile]
+        ) -> Bool {
+            let bodyForLinks = stripYamlFrontmatter(from: markdown)
+            for link in parseWikilinks(from: bodyForLinks) {
+                if resolveWikilinkToFilePath(linkText: link, in: files) == targetNorm {
+                    return true
+                }
+            }
+            if markdown.contains("brain2_ancc") {
+                for raw in extractRelatedVaultPaths(from: markdown) {
+                    if normalizeGraphPathKey(raw) == targetNorm {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func wikilinkStemForNormalizedPath(_ targetNorm: String, usable: [MarkdownFile]) -> String {
+            if let file = usable.first(where: { normalizeGraphPathKey($0.path) == targetNorm }) {
+                let base = (file.path as NSString).lastPathComponent
+                let withoutMd = (base as NSString).deletingPathExtension
+                return simplifiedConversationStem(withoutMd)
+            }
+            let tail = (targetNorm as NSString).lastPathComponent
+            let stem = (tail as NSString).deletingPathExtension
+            return stem.isEmpty ? "note" : stem
+        }
+
+        private func performDeleteConversationWithRewire(vaultRootURL: URL, relativeConversationPath: String) throws {
+            let allMarkdownFiles = readAllMarkdownFiles(at: vaultRootURL)
+            let usable = allMarkdownFiles.filter { !isAnccModelMemoryVaultPath($0.path) }
+            let deletedNorm = normalizeGraphPathKey(relativeConversationPath)
+
+            guard let deletedFile = usable.first(where: { normalizeGraphPathKey($0.path) == deletedNorm }) else {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 40,
+                    userInfo: [NSLocalizedDescriptionKey: "Ficheiro da conversa nao encontrado no vault."]
+                )
+            }
+
+            let neighbors = graphNeighborIds(of: deletedNorm, usable: usable)
+            var contentByNorm: [String: String] = [:]
+
+            for file in usable {
+                let k = normalizeGraphPathKey(file.path)
+                if k == deletedNorm {
+                    continue
+                }
+                var next = file.content
+                next = stripVaultPathLinesToDeleted(from: next, deletedNorm: deletedNorm)
+                next = removeWikilinksResolvingToTarget(from: next, deletedNorm: deletedNorm, files: usable)
+                contentByNorm[k] = next
+            }
+
+            let sortedNeighbors = neighbors.sorted()
+            if sortedNeighbors.count >= 2 {
+                let anchorNorm = sortedNeighbors[0]
+                var anchorContent = contentByNorm[anchorNorm]
+                if anchorContent == nil {
+                    anchorContent = usable.first(where: { normalizeGraphPathKey($0.path) == anchorNorm })?.content ?? ""
+                }
+                var updated = anchorContent ?? ""
+                for other in sortedNeighbors.dropFirst() {
+                    if !markdownLinksToNormalizedTarget(updated, targetNorm: other, files: usable) {
+                        let stem = wikilinkStemForNormalizedPath(other, usable: usable)
+                        updated = updated.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !updated.isEmpty {
+                            updated += "\n\n"
+                        }
+                        updated += "[[\(stem)]]\n"
+                    }
+                }
+                contentByNorm[anchorNorm] = updated
+            }
+
+            let deletedURL = vaultFileURL(root: vaultRootURL, relativePath: deletedFile.path)
+            guard fileManager.fileExists(atPath: deletedURL.path) else {
+                throw NSError(
+                    domain: "Brain2Native",
+                    code: 41,
+                    userInfo: [NSLocalizedDescriptionKey: "Ficheiro da conversa nao existe no disco."]
+                )
+            }
+
+            for file in usable {
+                let k = normalizeGraphPathKey(file.path)
+                if k == deletedNorm {
+                    continue
+                }
+                guard let next = contentByNorm[k] else { continue }
+                if next == file.content {
+                    continue
+                }
+                let url = vaultFileURL(root: vaultRootURL, relativePath: file.path)
+                try next.write(to: url, atomically: true, encoding: .utf8)
+            }
+
+            try fileManager.removeItem(at: deletedURL)
+        }
+
+        private func vaultFileURL(root: URL, relativePath: String) -> URL {
+            let cleaned = relativePath
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                .replacingOccurrences(of: "\\", with: "/")
+            var url = root
+            for segment in cleaned.split(separator: "/") {
+                url = url.appendingPathComponent(String(segment), isDirectory: false)
+            }
+            return url
+        }
+
         private func normalizeFolderPathSegments(_ raw: String) -> String {
             raw
                 .replacingOccurrences(of: "\\", with: "/")
@@ -2238,7 +2514,7 @@ struct WebView: NSViewRepresentable {
             let usable = files
 
             let pathSet = Set(usable.map { normalizeGraphPathKey($0.path) })
-            var nodes: [[String: String]] = usable.map { f in
+            let nodes: [[String: String]] = usable.map { f in
                 ["id": normalizeGraphPathKey(f.path), "label": f.name]
             }
 

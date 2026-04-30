@@ -6,6 +6,7 @@ import {
   VAULT_LOOSE_MEMORIES_FOLDER_NAME,
   VAULT_MEMORIES_FOLDER_NOTE_BASENAME,
 } from "@/lib/brain2CentralFolder";
+import { computeConversationDeletionMutations } from "@/lib/conversationDeletionRewire";
 import {
   buildConversationsFromMarkdownFiles,
   buildGraphFromMarkdownFiles,
@@ -650,12 +651,15 @@ export async function renamePresetConversation(
 
 export async function deletePresetConversation(conversationPath: string): Promise<void> {
   const normalizedConversationPath = normalizeConversationPath(conversationPath);
-  const targetAbsolutePath = resolvePresetPath(normalizedConversationPath);
-  const targetStats = await fs.stat(targetAbsolutePath);
+  const rawMarkdownFiles = await readAllMarkdownFilesFromPath(PRESET_VAULT_PATH);
+  const { pathToDelete, filesToWrite } = computeConversationDeletionMutations(
+    rawMarkdownFiles,
+    normalizedConversationPath,
+  );
 
-  if (!targetStats.isFile()) {
-    throw new Error("Conversation path is not a file.");
+  for (const f of filesToWrite) {
+    await fs.writeFile(resolvePresetPath(f.path), f.content, "utf8");
   }
 
-  await fs.rm(targetAbsolutePath, { force: false });
+  await fs.rm(resolvePresetPath(pathToDelete), { force: false });
 }

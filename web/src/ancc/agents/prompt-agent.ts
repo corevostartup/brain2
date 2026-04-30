@@ -22,6 +22,20 @@ export function buildHiddenSystemPromptBlock(ctx: AssembledContext): string {
     lines.push(line);
   }
   lines.push("---");
+  if (ctx.temporalReminderLines.length > 0) {
+    lines.push(
+      "PRIORIDADE — Lembretes temporais (calendário local: o dia «hoje» é " +
+        ctx.referenceLocalDateKey +
+        "):",
+    );
+    lines.push(
+      "Obrigatório nesta resposta: integra CADA ponto abaixo no corpo do texto, num ou mais parágrafos próprios, a MEIO da mensagem (não só no início nem só no fim): responde ao utilizador, e no meio intercala o lembrete com naturalidade. Não apresentes como lista de tarefas nem como cabeçalho de agenda.",
+    );
+    for (const line of ctx.temporalReminderLines) {
+      lines.push(`- ${line}`);
+    }
+    lines.push("---");
+  }
   lines.push(`Active topics: ${ctx.wikiLinksFormatted.join(", ") || "(none)"}`);
   lines.push(`Priority memory class: ${ctx.priorityMemoryClass}`);
   lines.push("Relevant correlations:");
@@ -64,15 +78,8 @@ export function buildHiddenSystemPromptBlock(ctx: AssembledContext): string {
       lines.push(`- ${b}`);
     }
   }
-  lines.push(
-    "Lembretes temporais (dia de hoje — integra na resposta com naturalidade e calor humano; não listes como agenda):",
-  );
   if (ctx.temporalReminderLines.length === 0) {
-    lines.push("- (nenhum)");
-  } else {
-    for (const line of ctx.temporalReminderLines) {
-      lines.push(`- ${line}`);
-    }
+    lines.push("Lembretes temporais (dia local): nenhum pendente para hoje.");
   }
   lines.push("Behavioral guidance:");
   for (const g of ctx.behavioralGuidance) {

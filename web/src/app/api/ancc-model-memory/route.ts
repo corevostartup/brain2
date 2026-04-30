@@ -90,8 +90,8 @@ export async function POST(request: Request) {
     "És um extrator para o sistema ANCC. Devolve APENAS um único objeto JSON válido (sem markdown à volta, sem texto antes ou depois).",
     'Formato: {"memories":[...],"temporal":[...]}',
     "memories (máx. 2): reflexões do assistente sobre o turno — não inventes factos sobre a vida do utilizador.",
-    "temporal (máx. 2): pedidos de lembrete, datas citadas, ou eventos ligados a um dia. Campos: dueLocalDate (YYYY-MM-DD), summary (o que relembrar), store (bool), recurrence \"yearly\" para aniversários/datas anuais.",
-    "Datas relativas: usa referenceLocalDate como «hoje» no calendário local e converte expressões como «amanhã», «daqui a duas semanas», «semana que vem», «em um mês» para dueLocalDate (aproximações aceitáveis).",
+    "temporal (máx. 3): pedidos de lembrete, datas citadas (absolutas ou relativas), ou eventos ligados a um dia. Campos: dueLocalDate (YYYY-MM-DD), summary (o que relembrar), store (bool), recurrence \"yearly\" para aniversários/datas anuais.",
+    "Datas relativas: usa referenceLocalDate como «hoje» no calendário local e converte expressões como «amanhã», «daqui a um dia», «daqui a duas semanas», «semana que vem», «em um mês», «na data de hoje» (o dia actual da conversa) para dueLocalDate (aproximações aceitáveis).",
     "Se não houver nada temporal, usa temporal: []. Se não houver reflexões, usa memories: [].",
     "confidence em memories entre 0 e 1 quando aplicável.",
   ].join("\n");

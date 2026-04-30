@@ -53,19 +53,22 @@ export function buildConversationsFromMarkdownFiles(files: VaultMarkdownFile[]):
     .sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
-function normalizePathKey(path: string): string {
+export function normalizeVaultPathKey(path: string): string {
   return path.replace(/\\/g, "/").trim().toLowerCase();
 }
 
 /** Resolve [[wikilink]] para o path normalizado de um ficheiro do conjunto (sem criar nós órfãos). */
-function resolveWikilinkToFilePath(linkText: string, files: VaultMarkdownFile[]): string | null {
+export function resolveVaultWikilinkToNormalizedPath(
+  linkText: string,
+  files: VaultMarkdownFile[],
+): string | null {
   const t = linkText.trim().toLowerCase();
   if (!t) {
     return null;
   }
 
   for (const f of files) {
-    const pathNorm = normalizePathKey(f.path);
+    const pathNorm = normalizeVaultPathKey(f.path);
     const stem = f.name.replace(/\.md$/i, "").trim().toLowerCase();
     const fullLower = f.name.trim().toLowerCase();
     const base = pathNorm.split("/").pop() ?? "";
@@ -97,7 +100,7 @@ export function buildGraphFromMarkdownFiles(files: VaultMarkdownFile[]): VaultGr
   const usable = files.filter((f) => !isAnccModelMemoryVaultPath(f.path));
 
   const nodes: VaultGraph["nodes"] = usable.map((f) => {
-    const id = normalizePathKey(f.path);
+    const id = normalizeVaultPathKey(f.path);
     const label = f.name.replace(/\.md$/i, "") || f.name;
     return { id, label };
   });
@@ -120,17 +123,17 @@ export function buildGraphFromMarkdownFiles(files: VaultMarkdownFile[]): VaultGr
   };
 
   for (const file of usable) {
-    const sourcePath = normalizePathKey(file.path);
+    const sourcePath = normalizeVaultPathKey(file.path);
 
     for (const link of parseWikilinks(stripYamlFrontmatter(file.content))) {
-      const targetPath = resolveWikilinkToFilePath(link, usable);
+      const targetPath = resolveVaultWikilinkToNormalizedPath(link, usable);
       if (targetPath && pathSet.has(targetPath)) {
         addEdge(sourcePath, targetPath);
       }
     }
 
     for (const raw of extractRelatedVaultPathsFromMarkdown(file.content)) {
-      const targetPath = normalizePathKey(raw);
+      const targetPath = normalizeVaultPathKey(raw);
       if (pathSet.has(targetPath)) {
         addEdge(sourcePath, targetPath);
       }

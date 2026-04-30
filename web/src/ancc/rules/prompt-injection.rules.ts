@@ -22,7 +22,7 @@ export const ANCC_MODEL_MEMORY_FENCE_INSTRUCTION = [
   '{"memories":[{"summary":"...","topics":["TópicoA"],"confidence":0.62,"store":true}],"temporal":[{"dueLocalDate":"2026-04-20","summary":"O que relembrar nesse dia (ex.: aniversário que o utilizador mencionou)","store":true,"recurrence":"none"}]}',
   ":::",
   "Regras: JSON válido; 0 a 2 entradas em `memories`; `summary` até ~4000 caracteres; `topics` ajudam wikilinks; `confidence` 0–1; `store`: false para não gravar essa linha.",
-  "Campo opcional `temporal`: quando o utilizador citar uma data, pedir para lembrar nesse dia, ou comentar algo ligado a um dia específico — inclui `dueLocalDate` em YYYY-MM-DD (calendário local do utilizador), `summary` curto do que relembrar, `store` false para não guardar, `recurrence` \"yearly\" para datas anuais (ex.: aniversário).",
+  "Campo opcional `temporal`: quando o utilizador citar ou pedir uma data, quiser lembrete, ou mencionar um compromisso futuro — avalia se deve persistir; se sim, `dueLocalDate` em YYYY-MM-DD (local), `summary` curto do que relembrar, `store` false para não guardar, `recurrence` \"yearly\" para datas anuais (ex.: aniversário).",
   "Para datas relativas («daqui a duas semanas», «amanhã»), usa a linha «hoje» do bloco ANCC acima e converte para YYYY-MM-DD (podes aproximar).",
   "Se não quiseres memória neste turno, não escrevas o bloco. Se quiseres declarar explicitamente «nada a gravar», usa {\"memories\":[]} sem outro texto dentro do fence.",
 ] as const;

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>695824920562-lilsd1a1kktjeks24gr9ihphn3ic13ud.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.695824920562-lilsd1a1kktjeks24gr9ihphn3ic13ud</string>
+	<key>API_KEY</key>
+	<string>AIzaSyDxV8PszO-L_N9ny7jar4dBJ_Ex2bJO-DM</string>
+	<key>GCM_SENDER_ID</key>
+	<string>695824920562</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.corevo.brain2-iOS</string>
+	<key>PROJECT_ID</key>
+	<string>brain2-6bea9</string>
+	<key>STORAGE_BUCKET</key>
+	<string>brain2-6bea9.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:695824920562:ios:ef5c973c8f00c4101bc56b</string>
+</dict>
+</plist>

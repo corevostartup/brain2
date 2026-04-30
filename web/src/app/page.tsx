@@ -99,6 +99,7 @@ import {
   formatModelMemoryForAnccContext,
   formatModelMemoryMarkdown,
   integrateFinalizeIntoModelMemory,
+  isAnccModelMemoryVaultPath,
   loadModelMemoryState,
   saveModelMemoryState,
   type ModelMemoryEntry,
@@ -121,6 +122,7 @@ import {
   mergeTemporalItemsIntoState,
   saveTemporalMemoryState,
   userMessageSuggestsTemporalExtract,
+  weavePendingTemporalRemindersIntoReply,
 } from "@/lib/anccTemporalMemory";
 import { tryExtractRelativeTemporalFromUserMessage } from "@/lib/temporalRelativeResolve";
 import {
@@ -199,6 +201,7 @@ type NativeBridge = {
   saveAnccModelMemory?: (payload: { markdown: string; fileBase: string }) => void;
   createFolder?: (payload: { parentPath: string; folderName: string }) => void;
   renameFolder?: (payload: { folderPath: string; newFolderName: string }) => void;
+  deleteConversation?: (payload: { conversationPath: string }) => void;
 };
 
 /** Aguarda o resultado da criacao/renomeacao de pastas no shell macOS (sandbox + bookmark). */
@@ -230,6 +233,40 @@ function callNativeFolderMutation(call: () => void): Promise<void> {
     } catch (error) {
       window.clearTimeout(timeoutId);
       window.removeEventListener("brain2-native-folder-mutation-result", onResult);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
+/** Aguarda exclusao de conversa no vault local (macOS) com realocacao de ligacoes. */
+function callNativeConversationDelete(call: () => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeoutMs = 120_000;
+    const timeoutId = window.setTimeout(() => {
+      window.removeEventListener("brain2-native-conversation-delete-result", onResult);
+      window.alert("A operacao demorou demais. Tente novamente.");
+      reject(new Error("brain2-native-conversation-delete-timeout"));
+    }, timeoutMs);
+
+    const onResult = (ev: Event) => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("brain2-native-conversation-delete-result", onResult);
+      const detail = (ev as CustomEvent<{ success?: boolean; error?: string }>).detail;
+      if (detail?.success) {
+        resolve();
+        return;
+      }
+      const msg = detail?.error?.trim() || "Nao foi possivel excluir a conversa.";
+      window.alert(msg);
+      reject(new Error(msg));
+    };
+
+    window.addEventListener("brain2-native-conversation-delete-result", onResult, { once: true });
+    try {
+      call();
+    } catch (error) {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("brain2-native-conversation-delete-result", onResult);
       reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
@@ -356,6 +393,59 @@ function normalizeGraphNodeId(raw: string): string {
     .toLowerCase();
 }
 
+function buildAnccMemoryNodeIdentitySet(conversations: VaultConversation[]): Set<string> {
+  const blocked = new Set<string>();
+  for (const conversation of conversations) {
+    if (!isAnccModelMemoryVaultPath(conversation.path)) {
+      continue;
+    }
+    blocked.add(normalizeGraphNodeId(conversation.id));
+    blocked.add(normalizeGraphNodeId(conversation.title));
+
+    const displayTitle = formatConversationDisplayTitle(conversation.title);
+    if (displayTitle) {
+      blocked.add(normalizeGraphNodeId(displayTitle));
+    }
+
+    const fileName = (conversation.path.split("/").pop() ?? "").replace(/\.md$/i, "");
+    if (fileName) {
+      blocked.add(normalizeGraphNodeId(fileName));
+      const displayFileName = formatConversationDisplayTitle(fileName);
+      if (displayFileName) {
+        blocked.add(normalizeGraphNodeId(displayFileName));
+      }
+    }
+  }
+  blocked.delete("");
+  return blocked;
+}
+
+function filterAnccMemoryNodesFromGraph(graph: VaultGraph, conversations: VaultConversation[]): VaultGraph {
+  const blockedIds = buildAnccMemoryNodeIdentitySet(conversations);
+  if (blockedIds.size === 0) {
+    return graph;
+  }
+
+  const allowedNodeIds = new Set<string>();
+  const nodes = graph.nodes.filter((node) => {
+    const id = normalizeGraphNodeId(String(node.id ?? ""));
+    const label = normalizeGraphNodeId(node.label ?? "");
+    const blocked = blockedIds.has(id) || blockedIds.has(label);
+    if (!blocked) {
+      allowedNodeIds.add(id);
+    }
+    return !blocked;
+  });
+
+  const edges = graph.edges.filter((edge) => {
+    const source = normalizeGraphNodeId(String(edge.source ?? ""));
+    const target = normalizeGraphNodeId(String(edge.target ?? ""));
+    return allowedNodeIds.has(source) && allowedNodeIds.has(target);
+  });
+
+  return { nodes, edges };
+}
+
 function sanitizeVaultGraph(graph: VaultGraph): VaultGraph {
   const nodeLabelById = new Map<string, string>();
 
@@ -403,16 +493,20 @@ function normalizeGraph(
   graph: VaultGraph | null | undefined,
   conversations: VaultConversation[]
 ): VaultGraph | null {
+  const visibleConversations = conversations.filter(
+    (conversation) => !isAnccModelMemoryVaultPath(conversation.path)
+  );
   const hasValidGraph = Boolean(graph && Array.isArray(graph.nodes) && Array.isArray(graph.edges));
   if (hasValidGraph && (graph?.nodes.length ?? 0) > 0) {
-    return sanitizeVaultGraph(graph ?? { nodes: [], edges: [] });
+    const sanitized = sanitizeVaultGraph(graph ?? { nodes: [], edges: [] });
+    return filterAnccMemoryNodesFromGraph(sanitized, conversations);
   }
 
-  if (conversations.length === 0) {
+  if (visibleConversations.length === 0) {
     return hasValidGraph ? sanitizeVaultGraph(graph ?? { nodes: [], edges: [] }) : null;
   }
 
-  return buildConversationOnlyVaultGraph(conversations);
+  return buildConversationOnlyVaultGraph(visibleConversations);
 }
 
 /** Tempo minimo da splash; o Firebase pode resolver a sessao em poucos ms. */
@@ -1315,12 +1409,8 @@ export default function Home() {
   }, [hasNativeVaultData, hasCloudVaultData, mutatePresetVaultData, selectedConversationId]);
 
   const handleDeleteConversation = useCallback(async (conversationPath: string, conversationTitle: string) => {
-    if (hasNativeVaultData || hasCloudVaultData) {
-      window.alert(
-        hasCloudVaultData
-          ? "Excluir conversa ainda nao esta disponivel para o vault no Google Drive (somente leitura)."
-          : "Excluir conversa via menu lateral ainda nao esta disponivel para o vault nativo."
-      );
+    if (hasCloudVaultData) {
+      window.alert("Excluir conversa ainda nao esta disponivel para o vault no Google Drive (somente leitura).");
       return;
     }
 
@@ -1328,6 +1418,29 @@ export default function Home() {
       `Excluir a conversa \"${conversationTitle}\"? Esta acao nao pode ser desfeita.`
     );
     if (!confirmed) {
+      return;
+    }
+
+    if (hasNativeVaultData) {
+      const bridge = (window as Window & { Brain2Native?: NativeBridge }).Brain2Native;
+      if (typeof bridge?.deleteConversation !== "function") {
+        window.alert("Atualize a app Brain2 no Mac para excluir conversas no vault local.");
+        return;
+      }
+      setGraphLoading(true);
+      try {
+        await callNativeConversationDelete(() => {
+          bridge.deleteConversation!({ conversationPath });
+        });
+        if (selectedConversationId === conversationPath.toLowerCase()) {
+          setSelectedConversationId(null);
+          setVaultConversationLiveChat(false);
+        }
+      } catch {
+        /* alert ja mostrado */
+      } finally {
+        setGraphLoading(false);
+      }
       return;
     }
 
@@ -1736,7 +1849,13 @@ export default function Home() {
       }
 
       const fenceParsed = stripBrain2ModelMemoryFence(assistantRaw);
-      const displayAssistant = fenceParsed.displayText;
+      let displayAssistant = fenceParsed.displayText;
+      if (pendingTemporalReminders.length > 0) {
+        displayAssistant = weavePendingTemporalRemindersIntoReply(
+          displayAssistant,
+          pendingTemporalReminders,
+        );
+      }
       const fenceStorable = pickStorableStructuredMemories(fenceParsed.memories);
       let structuredMemories = fenceStorable;
       let structuredTemporal = pickStorableTemporalItems(fenceParsed.temporal);

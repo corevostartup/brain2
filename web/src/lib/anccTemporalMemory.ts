@@ -213,8 +213,103 @@ export function userMessageSuggestsTemporalExtract(msg: string): boolean {
     /\b\d{1,2}\s*\/\s*\d{1,2}(\s*\/\s*\d{2,4})?\b/.test(t) ||
     /\bdaqui\s+a\b/.test(t) ||
     /\bem\s+\d+\s+semanas?\b/i.test(t) ||
+    /\b(na\s+)?data(\s+de)?\s+hoje\b/i.test(t) ||
+    /\b(lembr|lembra|lembrar|relembr|lembrete)\w*\s+.+\b(amanh[ãa]|hoje|depois\s+de\s+amanh[ãa])\b/i.test(t) ||
     /\b(amanh[ãa]|hoje|depois\s+de\s+amanh[ãa]|semana\s+que\s+vem|m[êe]s\s+que\s+vem|pr[oó]xim[oa]s?|lembr|lembra|lembrar|agenda|anivers[aá]ri|data\b|dia\s+\d+)/i.test(
       t,
     )
   );
+}
+
+function significantTokens(s: string): string[] {
+  const stop = new Set([
+    "que",
+    "para",
+    "com",
+    "uma",
+    "uns",
+    "pelo",
+    "pela",
+    "por",
+    "dos",
+    "das",
+    "nos",
+    "nas",
+    "foi",
+    "são",
+    "como",
+    "sobre",
+    "isso",
+    "esse",
+    "essa",
+    "este",
+    "esta",
+    "muito",
+    "mais",
+    "quando",
+    "onde",
+  ]);
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/\W+/)
+    .filter((w) => w.length > 3 && !stop.has(w))
+    .slice(0, 8);
+}
+
+function reminderLikelyPresentInReply(summary: string, replyNormalized: string): boolean {
+  const compact = summary.replace(/\s+/g, " ").trim().toLowerCase();
+  if (compact.length >= 10 && replyNormalized.includes(compact.slice(0, Math.min(80, compact.length)))) {
+    return true;
+  }
+  const tokens = significantTokens(summary);
+  if (tokens.length === 0) return replyNormalized.includes(compact.slice(0, 48));
+  const hits = tokens.filter((tok) => replyNormalized.includes(tok));
+  return hits.length >= Math.min(2, tokens.length);
+}
+
+function formatTemporalReminderParagraph(reminders: TemporalReminder[]): string {
+  if (reminders.length === 1) {
+    return `Queria relembrar-te disto, como tinhas pedido: ${reminders[0].summary}`;
+  }
+  const bullets = reminders.map((r, i) => `${i + 1}. ${r.summary}`);
+  return `Queria relembrar-te disto, como tinhas pedido:\n${bullets.join("\n")}`;
+}
+
+/**
+ * Garante que lembretes do dia aparecem no corpo da resposta (a meio), se o modelo os omitiu.
+ */
+export function weavePendingTemporalRemindersIntoReply(
+  displayText: string,
+  reminders: TemporalReminder[],
+): string {
+  const trimmed = displayText.trim();
+  if (reminders.length === 0 || !trimmed) return displayText;
+  const replyNorm = trimmed.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const missing = reminders.filter((r) => !reminderLikelyPresentInReply(r.summary, replyNorm));
+  if (missing.length === 0) return displayText;
+  const paragraph = formatTemporalReminderParagraph(missing);
+
+  const blocks = trimmed.split(/\n\n+/);
+  if (blocks.length >= 3) {
+    const idx = Math.max(1, Math.floor(blocks.length / 2));
+    blocks.splice(idx, 0, paragraph);
+    return blocks.join("\n\n");
+  }
+  if (blocks.length === 2) {
+    return `${blocks[0]}\n\n${paragraph}\n\n${blocks[1]}`;
+  }
+
+  const sentences = trimmed.match(/[^.!?]+[.!?]+|[^.!?]+$/g);
+  if (sentences && sentences.length >= 3) {
+    const mid = Math.floor(sentences.length / 2);
+    const out = [...sentences.slice(0, mid), ` ${paragraph} `, ...sentences.slice(mid)];
+    return out.join("").trim();
+  }
+  if (sentences && sentences.length === 2) {
+    return `${sentences[0].trim()}\n\n${paragraph}\n\n${sentences[1].trim()}`;
+  }
+
+  return `${trimmed}\n\n${paragraph}`;
 }

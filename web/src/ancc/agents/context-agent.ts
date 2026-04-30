@@ -33,6 +33,12 @@ export function assembleContext(input: {
   const name = input.userAssistantDisplayName?.trim();
   const personalityLine = formatPersonalityForAnccGuidance(input.userPersonalityProfile ?? null);
   const behavioralGuidance: string[] = [...DEFAULT_BEHAVIORAL_GUIDANCE];
+  const temporalLines = input.temporalReminderLines ?? [];
+  if (temporalLines.length > 0) {
+    behavioralGuidance.unshift(
+      "Se o bloco ANCC listou lembretes temporais para hoje, cumpre-os nesta resposta antes de fechares a mensagem: integra-os a meio do texto, com naturalidade.",
+    );
+  }
   if (name) {
     behavioralGuidance.unshift(
       `User-chosen assistant display name (use naturally when signing or addressing): "${name}". Product is still Brain2.`
@@ -51,7 +57,7 @@ export function assembleContext(input: {
     vaultCorrelations: input.vaultCorrelations,
     vaultCorrelationsPersisted: input.vaultCorrelationsPersisted,
     behavioralGuidance,
-    temporalReminderLines: input.temporalReminderLines ?? [],
+    temporalReminderLines: temporalLines,
     referenceLocalDateKey: input.referenceLocalDateKey,
   };
 }

@@ -2,154 +2,80 @@
 //  GoogleOAuthSignInController.swift
 //  brain2-iOS
 //
-//  ASWebAuthenticationSession (fluxo recomendado pela Apple para OAuth) + PKCE.
+//  GoogleSignIn nativo (mesmo modelo do app Lyka).
 //
 
-import AuthenticationServices
 import Foundation
+import GoogleSignIn
 import UIKit
 
-final class GoogleOAuthSignInController: NSObject, ASWebAuthenticationPresentationContextProviding {
-    private var authSession: ASWebAuthenticationSession?
-    private var pkceVerifier = ""
-    private var oauthState = ""
-
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let windows = scenes.flatMap(\.windows)
-        if let key = windows.first(where: { $0.isKeyWindow }) {
-            return key
-        }
-        if let any = windows.first {
-            return any
-        }
-        return scenes.first!.windows.first!
+final class GoogleOAuthSignInController: NSObject {
+    @MainActor
+    func handle(_ url: URL) -> Bool {
+        GIDSignIn.sharedInstance.handle(url)
     }
 
     func startGoogleSignIn(completion: @escaping (Result<GoogleOAuthPKCE.Tokens, Error>) -> Void) {
-        authSession?.cancel()
-
-        let clientId = NativeOAuthSecrets.googleOAuthClientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clientId.isEmpty else {
+        guard let clientId = googleClientIdFromFirebasePlist() else {
             completion(.failure(OAuthConfigError.missingClientId))
             return
         }
 
-        let redirectURI = NativeOAuthSecrets.googleOAuthRedirectURI
-        pkceVerifier = GoogleOAuthPKCE.randomPKCEVerifier()
-        oauthState = GoogleOAuthPKCE.randomPKCEVerifier()
+        Task { @MainActor in
+            guard
+                let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                let rootVC = windowScene.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? windowScene.windows.first?.rootViewController
+            else {
+                completion(.failure(OAuthConfigError.missingRootViewController))
+                return
+            }
 
-        guard let challenge = GoogleOAuthPKCE.pkceChallengeS256(verifier: pkceVerifier) else {
-            completion(.failure(OAuthConfigError.pkceFailed))
-            return
-        }
+            do {
+                GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientId)
+                let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: rootVC)
+                guard let idToken = result.user.idToken?.tokenString, !idToken.isEmpty else {
+                    completion(.failure(OAuthConfigError.missingIDToken))
+                    return
+                }
 
-        guard
-            let authURL = GoogleOAuthPKCE.buildAuthorizationURL(
-                clientId: clientId,
-                challenge: challenge,
-                state: oauthState,
-                redirectURI: redirectURI
-            )
-        else {
-            completion(.failure(OAuthConfigError.invalidAuthURL))
-            return
-        }
-
-        let scheme = URL(string: redirectURI)?.scheme ?? "brain2auth"
-
-        let session = ASWebAuthenticationSession(
-            url: authURL,
-            callbackURLScheme: scheme
-        ) { [weak self] callbackURL, error in
-            guard let self else { return }
-            self.authSession = nil
-
-            if let error {
+                let tokens = GoogleOAuthPKCE.Tokens(
+                    idToken: idToken,
+                    accessToken: result.user.accessToken.tokenString
+                )
+                completion(.success(tokens))
+            } catch {
                 completion(.failure(error))
-                return
             }
-
-            guard let callbackURL else {
-                completion(.failure(OAuthConfigError.missingCallback))
-                return
-            }
-
-            guard let items = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems else {
-                completion(.failure(OAuthConfigError.missingCallback))
-                return
-            }
-
-            if let errCode = items.first(where: { $0.name == "error" })?.value {
-                let desc = items.first(where: { $0.name == "error_description" })?.value ?? errCode
-                completion(.failure(OAuthConfigError.oauthProvider(errCode, desc)))
-                return
-            }
-
-            guard let returnedState = items.first(where: { $0.name == "state" })?.value, returnedState == self.oauthState else {
-                completion(.failure(OAuthConfigError.stateMismatch))
-                return
-            }
-
-            guard let code = items.first(where: { $0.name == "code" })?.value, !code.isEmpty else {
-                completion(.failure(OAuthConfigError.missingCode))
-                return
-            }
-
-            GoogleOAuthPKCE.exchangeCodeForTokens(
-                code: code,
-                clientId: clientId,
-                codeVerifier: self.pkceVerifier,
-                redirectURI: redirectURI,
-                clientSecret: NativeOAuthSecrets.googleOAuthClientSecret
-            ) { result in
-                completion(result)
-            }
-        }
-
-        session.presentationContextProvider = self
-        session.prefersEphemeralWebBrowserSession = false
-        authSession = session
-
-        if !session.start() {
-            completion(.failure(OAuthConfigError.sessionStartFailed))
         }
     }
 
-    func cancel() {
-        authSession?.cancel()
-        authSession = nil
+    private func googleClientIdFromFirebasePlist() -> String? {
+        guard
+            let url = Bundle.main.url(forResource: "GoogleService-Info", withExtension: "plist"),
+            let data = try? Data(contentsOf: url),
+            let raw = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+            let clientId = (raw["CLIENT_ID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !clientId.isEmpty
+        else {
+            return nil
+        }
+        return clientId
     }
 }
 
 enum OAuthConfigError: LocalizedError {
     case missingClientId
-    case pkceFailed
-    case invalidAuthURL
-    case missingCallback
-    case missingCode
-    case stateMismatch
-    case sessionStartFailed
-    case oauthProvider(String, String)
+    case missingRootViewController
+    case missingIDToken
 
     var errorDescription: String? {
         switch self {
         case .missingClientId:
-            return "Configure o ID cliente Google (NativeOAuthSecrets.Local.swift)."
-        case .pkceFailed:
-            return "Falha ao preparar PKCE."
-        case .invalidAuthURL:
-            return "URL de autorização inválida."
-        case .missingCallback:
-            return "Resposta de login incompleta."
-        case .missingCode:
-            return "Código de autorização ausente."
-        case .stateMismatch:
-            return "Estado OAuth inválido (segurança)."
-        case .sessionStartFailed:
-            return "Não foi possível abrir o login do Google."
-        case .oauthProvider(_, let desc):
-            return desc
+            return "CLIENT_ID ausente em GoogleService-Info.plist."
+        case .missingRootViewController:
+            return "Janela indisponivel para login Google."
+        case .missingIDToken:
+            return "Token do Google nao recebido."
         }
     }
 }

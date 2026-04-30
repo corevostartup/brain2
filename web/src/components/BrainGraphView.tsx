@@ -27,8 +27,8 @@ function clamp(value: number, min: number, max: number): number {
 
 // Física estilo “organismo”: molas + repulsão + inércia (via d3) + simulação mais longa
 const PHYSICS = {
-  chargeStrength: -320,
-  nativeChargeStrength: -560,
+  chargeStrength: -460,
+  nativeChargeStrength: -760,
   velocityDecay: 0.28,
   /** Passo 1+4: atrito moderado — suave sem ficar eternamente em oscilação. */
   nativeVelocityDecay: 0.5,
@@ -37,21 +37,21 @@ const PHYSICS = {
   /** Passo 4: alpha um pouco mais lento para movimentos mais suaves. */
   nativeAlphaDecay: 0.015,
   nativeAlphaMin: 0.001,
-  baseLinkDistance: 92,
-  degreeDistanceBoost: 20,
-  degreeMismatchBoost: 3,
-  linkStrengthMin: 0.35,
-  linkStrengthMax: 0.95,
+  baseLinkDistance: 88,
+  degreeDistanceBoost: 36,
+  degreeMismatchBoost: 16,
+  linkStrengthMin: 0.12,
+  linkStrengthMax: 0.62,
   warmupTicks: 140,
   cooldownMs: 22000,
   /** Menos tempo de “motor ligado” = menos agitação contínua (antes 120s era excessivo). */
   nativeCooldownMs: 14000,
   /** Ancora o conjunto no centro do espaço do grafo (0,0); o utilizador continua a poder pan/zoom na vista. */
-  centerStrength: 0.35,
+  centerStrength: 0.2,
   /** Passo 2: mais forte no nativo para o grupo não “cair” da vista. */
-  nativeCenterStrength: 0.26,
-  pullToOriginStrength: 0.045,
-  nativePullToOriginStrength: 0.072,
+  nativeCenterStrength: 0.16,
+  pullToOriginStrength: 0.018,
+  nativePullToOriginStrength: 0.03,
   /** Passo 4: molas um pouco mais “moles” (multiplicador na força link). */
   nativeLinkStrengthScale: 0.82,
   /** Conversa avançada: centro fixo em (0,0) com força reforçada para o conjunto não “vagar”. */
@@ -163,6 +163,16 @@ function linkKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
+function deterministicUnitNoise(seed: string): number {
+  // Hash leve determinístico para variar arestas sem jitter temporal.
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 0xffffffff;
+}
+
 function nodeIdOf(n: unknown): string {
   if (n && typeof n === "object" && "id" in n && typeof (n as { id: unknown }).id === "string") {
     return (n as { id: string }).id;
@@ -170,8 +180,54 @@ function nodeIdOf(n: unknown): string {
   return String(n);
 }
 
-/** Igual a `nodeRelSize` no ForceGraph2D — usado para posicionar o rótulo abaixo do círculo. */
+/** Igual a `nodeRelSize` no ForceGraph2D — base do raio em coordenadas do grafo (antes do cap em ecrã). */
 const NODE_REL_SIZE = 5;
+/**
+ * Limite superior ao raio em pixels no ecrã quando o zoom é alto (os nós crescem com o zoom,
+ * como no Obsidian; sem cap ficam desproporcionadamente grandes).
+ */
+const MAX_NODE_RADIUS_SCREEN_PX = 20;
+
+function cappedNodeWorldRadius(val: number, globalScale: number): number {
+  const g = Math.max(globalScale, 0.0001);
+  const worldR = Math.sqrt(Math.max(0, val || 1)) * NODE_REL_SIZE;
+  const screenR = worldR * g;
+  const cappedScreen = Math.min(screenR, MAX_NODE_RADIUS_SCREEN_PX);
+  return cappedScreen / g;
+}
+
+/** Texto no ecrã escala com o zoom; abaixo do mínimo só se mostram esferas (estilo Obsidian). */
+const LABEL_REF_SCREEN_PX = 11;
+const LABEL_MAX_SCREEN_PX = 13;
+/** Abaixo disto (px no ecrã) o rótulo não é desenhado — evita aglomeração e texto ilegível. */
+const LABEL_HIDE_BELOW_SCREEN_PX = 4.25;
+/** Largura máxima do rótulo no ecrã (px). */
+const LABEL_MAX_WIDTH_SCREEN_PX = 168;
+/** Espaço entre o círculo e o texto no ecrã (px). */
+const LABEL_PAD_SCREEN_PX = 5;
+
+/**
+ * Converte tamanhos desejados no ecrã para unidades do grafo (o canvas aplica escala `globalScale`).
+ */
+function nodeLabelLayout(globalScale: number): {
+  showLabel: boolean;
+  fontGraphPx: number;
+  padGraph: number;
+  maxWidthGraph: number;
+} {
+  const g = Math.max(globalScale, 0.0001);
+  const rawScreen = LABEL_REF_SCREEN_PX * g;
+  if (rawScreen < LABEL_HIDE_BELOW_SCREEN_PX) {
+    return { showLabel: false, fontGraphPx: 0, padGraph: 0, maxWidthGraph: 0 };
+  }
+  const fontScreen = Math.min(LABEL_MAX_SCREEN_PX, rawScreen);
+  return {
+    showLabel: true,
+    fontGraphPx: fontScreen / g,
+    padGraph: LABEL_PAD_SCREEN_PX / g,
+    maxWidthGraph: LABEL_MAX_WIDTH_SCREEN_PX / g,
+  };
+}
 
 function truncateCanvasLabel(
   ctx: CanvasRenderingContext2D,
@@ -363,15 +419,33 @@ export default function BrainGraphView({
       const dt = degreeMap[e.target] || 1;
       const avg = (ds + dt) / 2;
       const mismatch = Math.abs(ds - dt);
+      const total = Math.max(2, activeNodes.length);
       const sameGroup = groupMap[e.source] === groupMap[e.target];
-      const lowDegBoost = 1 + 0.85 / (1 + avg);
-      const hubDamp = 1 / (1 + Math.log1p(Math.max(ds, dt)) * 0.42);
-      const groupAff = sameGroup ? 1.14 : 0.9;
-      const strength = clamp(groupAff * lowDegBoost * (0.55 + hubDamp * 0.45), PHYSICS.linkStrengthMin, PHYSICS.linkStrengthMax);
-      const distance =
-        PHYSICS.baseLinkDistance +
-        Math.log1p(avg) * PHYSICS.degreeDistanceBoost +
-        mismatch * PHYSICS.degreeMismatchBoost;
+      const degNorm = clamp(avg / Math.max(2, Math.sqrt(total) * 1.15), 0, 1);
+      const mismatchNorm = clamp(mismatch / Math.max(2, Math.sqrt(total)), 0, 1);
+      const noise = deterministicUnitNoise(linkKey(e.source, e.target));
+      const noiseBoost = (noise - 0.5) * 38; // comprimentos diferentes como no Obsidian
+
+      // Ligações entre hubs ficam mais longas para abrir o centro.
+      const hubSeparation = Math.pow(degNorm, 1.15) * PHYSICS.degreeDistanceBoost;
+      const mismatchSeparation = mismatchNorm * PHYSICS.degreeMismatchBoost;
+      const crossGroupSeparation = sameGroup ? 0 : 10;
+      const distance = clamp(
+        PHYSICS.baseLinkDistance + hubSeparation + mismatchSeparation + crossGroupSeparation + noiseBoost,
+        56,
+        210
+      );
+
+      // Molas mais suaves conforme distância e centralidade: evita “bolo”.
+      const hubDamp = 1 - degNorm * 0.56;
+      const mismatchDamp = 1 - mismatchNorm * 0.22;
+      const distanceDamp = 1 - clamp((distance - PHYSICS.baseLinkDistance) / 180, 0, 0.35);
+      const groupAff = sameGroup ? 1.02 : 0.82;
+      const strength = clamp(
+        groupAff * hubDamp * mismatchDamp * distanceDamp,
+        PHYSICS.linkStrengthMin,
+        PHYSICS.linkStrengthMax
+      );
       return {
         source: e.source,
         target: e.target,
@@ -1011,56 +1085,74 @@ export default function BrainGraphView({
     [variant, liveSpeechPathLinkKeys]
   );
 
-  const nodeCanvasObjectMode = useCallback(() => "after" as const, []);
+  const nodeCanvasObjectMode = useCallback(() => "replace" as const, []);
+
+  const nodePointerAreaPaint = useCallback(
+    (node: NodeObject<BrainNode>, color: string, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const x = node.x ?? 0;
+      const y = node.y ?? 0;
+      const r = cappedNodeWorldRadius(node.val ?? 1, globalScale);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, 2 * Math.PI, false);
+      ctx.fill();
+    },
+    [],
+  );
 
   const nodeCanvasObject = useCallback(
     (node: NodeObject<BrainNode>, ctx: CanvasRenderingContext2D, globalScale: number) => {
       const rawLabel = (node.name ?? "").trim() || String(node.id ?? "");
       const label = formatConversationDisplayTitle(rawLabel) || rawLabel;
-      const r = Math.sqrt(Math.max(0, node.val || 1)) * NODE_REL_SIZE;
-      const k = Math.max(globalScale, 0.04);
-      const fontPx = 11 / k;
-      const pad = 5 / k;
-      ctx.font = `${fontPx}px Inter, system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
+      const r = cappedNodeWorldRadius(node.val ?? 1, globalScale);
+      const { showLabel, fontGraphPx, padGraph, maxWidthGraph } = nodeLabelLayout(globalScale);
 
       const id = String(node.id);
-      let fill: string;
+      let labelFill: string;
       if (focusRootId && dragEgoSet) {
         if (!dragEgoSet.has(id)) {
-          fill = isNativeShell
+          labelFill = isNativeShell
             ? `rgba(220, 220, 220, ${0.96 * UNRELATED_NODE_ALPHA})`
             : `rgba(115, 115, 115, ${0.72 * UNRELATED_NODE_ALPHA})`;
         } else if (id === focusRootId) {
-          fill = "rgba(67, 56, 202, 0.96)";
+          labelFill = "rgba(67, 56, 202, 0.96)";
         } else if (isNativeShell) {
-          fill = "rgba(220, 220, 220, 0.96)";
+          labelFill = "rgba(220, 220, 220, 0.96)";
         } else if (!highlightSet) {
-          fill = "rgba(200, 200, 200, 0.94)";
+          labelFill = "rgba(200, 200, 200, 0.94)";
         } else if (highlightSet.has(id)) {
-          fill = "rgba(240, 240, 240, 0.98)";
+          labelFill = "rgba(240, 240, 240, 0.98)";
         } else {
-          fill = "rgba(115, 115, 115, 0.72)";
+          labelFill = "rgba(115, 115, 115, 0.72)";
         }
       } else if (isNativeShell) {
-        fill = "rgba(220, 220, 220, 0.96)";
+        labelFill = "rgba(220, 220, 220, 0.96)";
       } else if (!highlightSet) {
-        fill = "rgba(200, 200, 200, 0.94)";
+        labelFill = "rgba(200, 200, 200, 0.94)";
       } else if (highlightSet.has(id)) {
-        fill = "rgba(240, 240, 240, 0.98)";
+        labelFill = "rgba(240, 240, 240, 0.98)";
       } else {
-        fill = "rgba(115, 115, 115, 0.72)";
+        labelFill = "rgba(115, 115, 115, 0.72)";
       }
-      ctx.fillStyle = fill;
 
-      const maxW = 168 / k;
-      const truncated = truncateCanvasLabel(ctx, label, maxW);
       const x = node.x ?? 0;
       const y = node.y ?? 0;
-      ctx.fillText(truncated, x, y + r + pad);
+      ctx.fillStyle = nodeColor(node);
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, 2 * Math.PI, false);
+      ctx.fill();
+
+      if (!showLabel || !label) {
+        return;
+      }
+      ctx.font = `${fontGraphPx}px Inter, system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = labelFill;
+      const truncated = truncateCanvasLabel(ctx, label, maxWidthGraph);
+      ctx.fillText(truncated, x, y + r + padGraph);
     },
-    [highlightSet, isNativeShell, focusRootId, dragEgoSet]
+    [highlightSet, isNativeShell, focusRootId, dragEgoSet, nodeColor]
   );
 
   const onNodeHover = useCallback(
@@ -1183,6 +1275,7 @@ export default function BrainGraphView({
               nodeRelSize={NODE_REL_SIZE}
               nodeCanvasObjectMode={nodeCanvasObjectMode}
               nodeCanvasObject={nodeCanvasObject}
+              nodePointerAreaPaint={nodePointerAreaPaint}
               autoPauseRedraw={false}
               nodeColor={nodeColor}
               linkColor={linkColor}

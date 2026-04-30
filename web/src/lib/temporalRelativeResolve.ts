@@ -44,6 +44,9 @@ export function matchPortugueseRelativeOffsetDays(textLower: string, original: s
   if (/\bamanh[ãa]\b/.test(t)) return 1;
   if (/\bhoje\b/.test(t)) return 0;
 
+  if (/\bdaqui\s+a\s+um\s+dia\b/.test(t)) return 1;
+  if (/\bdaqui\s+a\s+dois\s+dias\b/.test(t)) return 2;
+
   let m = t.match(/\bdaqui\s+a\s+(\d+)\s+dias?\b/);
   if (m) return Math.min(366, Math.max(0, parseInt(m[1], 10)));
 
@@ -84,7 +87,7 @@ export function matchPortugueseRelativeOffsetDays(textLower: string, original: s
 }
 
 function suggestsReminderOrScheduleIntent(textLower: string): boolean {
-  return /\b(lembr|lembra|lembrar|relembr|agenda|marcar|marca|avis|avisa|combin|combiná|combinamos|n[aã]o\s+esquec|esquecer|anota|nota\s+para|lembrete|data\s+limite|até\s+lá|nesse\s+dia|quando\s+chegar)\b/i.test(
+  return /\b(lembr|lembra|lembrar|relembr|agenda|marcar|marca|avis|avisa|combin|combiná|combinamos|combinaste|n[aã]o\s+esquec|esquecer|anota|nota\s+para|lembrete|data\s+limite|até\s+lá|nesse\s+dia|quando\s+chegar|gostaria\s+que|queria\s+que|pediu\s+para)\b/i.test(
     textLower,
   );
 }
