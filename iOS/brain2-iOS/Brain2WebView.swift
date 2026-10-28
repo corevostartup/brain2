@@ -11,7 +11,7 @@ import UIKit
 import UniformTypeIdentifiers
 import WebKit
 
-private let defaultAppURL = "https://brain2corevo.netlify.app/"
+private let defaultAppURL = "https://brain2-sage-seven.vercel.app/"
 
 struct Brain2WebView: UIViewRepresentable {
     let urlString: String

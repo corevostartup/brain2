@@ -143,7 +143,7 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             WebView(
-                urlString: "https://brain2corevo.netlify.app/",
+                urlString: "https://brain2-sage-seven.vercel.app/",
                 directoryOnboarding: directoryOnboarding
             )
             .padding(.top, 34)

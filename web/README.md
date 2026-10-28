@@ -9,9 +9,28 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 	- `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
 	- `NEXT_PUBLIC_FIREBASE_APP_ID`
 3. In Firebase Console > Authentication > Sign-in method, enable `Google` provider.
-4. In Firebase Console > Authentication > Settings > Authorized domains, add your local/host domain if needed.
+4. In Firebase Console > Authentication > Settings > Authorized domains, add your local/host domain if needed (e.g. `brain2-sage-seven.vercel.app` and any custom domain).
 
 After that, start the app and use `Entrar com Google` on the login screen.
+
+### Vercel (Production)
+
+In the Vercel project **Settings → Environment Variables**, set the same keys as in `.env.local` for **Production**, **Preview**, and **Development**:
+
+- `NEXT_PUBLIC_FIREBASE_API_KEY`
+- `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
+- `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
+- `NEXT_PUBLIC_FIREBASE_APP_ID`
+- `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` (optional)
+- `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` (optional)
+- `NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID` (optional, for Drive in settings)
+
+Or from `web/`, after `npx vercel login`:
+
+```bash
+VERCEL_PROJECT=your-project-name ./scripts/sync-firebase-env-vercel.sh
+npx vercel --prod
+```
 
 ## Getting Started
 
