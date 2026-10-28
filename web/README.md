@@ -63,6 +63,11 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Deploy on Vercel
 
-A app Next.js vive em `web/`. O ficheiro `vercel.json` na **raiz do repositório** define `"rootDirectory": "web"` (equivalente a **Project Settings → Root Directory → `web`**).
+A app Next.js vive em `web/`. **Não uses `rootDirectory` em `vercel.json`** (a Vercel rejeita essa propriedade no ficheiro).
+
+Escolhe uma opção:
+
+1. **Recomendado:** **Project Settings → Build and Deployment → Root Directory → `web`** (Framework: Next.js). Podes remover overrides de install/build se usares só isto.
+2. **Alternativa:** `vercel.json` na raiz do repo com `installCommand` / `buildCommand` apontando para `web/` (já incluído no repositório).
 
 Guia: [Next.js deployment](https://nextjs.org/docs/app/building-your-application/deploying).
