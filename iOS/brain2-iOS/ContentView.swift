@@ -7,7 +7,7 @@ import SwiftUI
 import GoogleSignIn
 
 /// Query `brain2-shell` alinha com `page.tsx` (sessionStorage shell nativa, igual ao macOS).
-private let brain2WebURL = "https://brain2-corevo2.vercel.app/?brain2-shell=macos"
+private let brain2WebURL = "https://brain2-sage-seven.vercel.app/?brain2-shell=macos"
 
 struct ContentView: View {
     /// `false` = ecrã nativo de boas-vindas; `true` = shell nativo com WKWebView (fluxo nativo completo).
