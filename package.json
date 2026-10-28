@@ -1,0 +1,15 @@
+{
+  "name": "brain2",
+  "private": true,
+  "description": "Monorepo Brain2 — app Next.js em web/. Preferir Root Directory = web na Vercel.",
+  "scripts": {
+    "postinstall": "npm ci --prefix web --no-audit",
+    "build": "npm run build --prefix web",
+    "vercel-build": "npm run build --prefix web"
+  },
+  "dependencies": {
+    "next": "16.2.2",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  }
+}

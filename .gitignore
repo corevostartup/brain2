@@ -29,6 +29,7 @@ build/
 *.dSYM
 
 # Node / Next.js
+node_modules/
 web/node_modules/
 web/.next/
 web/out/
