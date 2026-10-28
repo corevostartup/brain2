@@ -9,7 +9,7 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 	- `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
 	- `NEXT_PUBLIC_FIREBASE_APP_ID`
 3. In Firebase Console > Authentication > Sign-in method, enable `Google` provider.
-4. In Firebase Console > Authentication > Settings > Authorized domains, add your local/host domain if needed (e.g. `brain2-sage-seven.vercel.app` and any custom domain).
+4. In Firebase Console > Authentication > Settings > Authorized domains, add your local/host domain if needed (e.g. `brain2-corevo2.vercel.app` and any custom domain).
 
 After that, start the app and use `Entrar com Google` on the login screen.
 
