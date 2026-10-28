@@ -6,7 +6,6 @@
 //
 
 import AppKit
-import AuthenticationServices
 import Foundation
 import SwiftUI
 @preconcurrency import WebKit
@@ -253,7 +252,7 @@ struct WebView: NSViewRepresentable {
         webView.load(request)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, ASWebAuthenticationPresentationContextProviding {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         static let messageHandlerName = "brain2Native"
         private static let selectedVaultPathDefaultsKey = "brain2-selected-vault-path"
         private static let selectedVaultBookmarkDefaultsKey = "brain2-selected-vault-bookmark"
@@ -268,14 +267,11 @@ struct WebView: NSViewRepresentable {
         private weak var webView: WKWebView?
         /// Referência forte: o @StateObject em ContentView mantém o ciclo de vida; evita nil antes do primeiro updateNSView.
         var directoryOnboarding: DirectoryOnboardingModel?
-        private var googleAuthSession: ASWebAuthenticationSession?
         private var googleLoopbackReceiver: OAuthLoopbackRedirectReceiver?
-        private var googleOAuthCompletedViaLoopback = false
         private let googleOAuthOutcomeLock = NSLock()
         private var googleOAuthOutcomeDelivered = false
-        /// Evita varios ASWebAuthenticationSession / listeners em paralelo (mensagem "helper application" no macOS).
+        /// Evita varios listeners loopback / navegador em paralelo.
         private var isGoogleOAuthFlowActive = false
-        private var oauthPresentationWindow: NSWindow?
         /// Garante uma tentativa extra de mostrar o onboarding no Mac mesmo se a web não chamar a bridge (Firebase modular, etc.).
         private var didScheduleMacOnboardingUnconditionalFallback = false
         private let fileManager = FileManager.default
@@ -518,15 +514,6 @@ struct WebView: NSViewRepresentable {
             }
         }
 
-        func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-            oauthPresentationWindow
-                ?? webView?.window
-                ?? NSApp.keyWindow
-                ?? NSApp.mainWindow
-                ?? NSApplication.shared.windows.first { $0.isVisible }
-                ?? NSApplication.shared.windows.first!
-        }
-
         private func endGoogleOAuthFlowTracking() {
             isGoogleOAuthFlowActive = false
         }
@@ -557,7 +544,6 @@ struct WebView: NSViewRepresentable {
                 return
             }
 
-            // Key/main primeiro: o helper do ASWebAuthenticationSession liga-se melhor a janela do app ativa do que so ao WKWebView.
             guard
                 let anchor = NSApp.keyWindow
                     ?? NSApp.mainWindow
@@ -605,14 +591,12 @@ struct WebView: NSViewRepresentable {
             NSLog("[Brain2 OAuth] client_id (inteiro, comparar com Credenciais Google): %@", clientId)
             #endif
 
-            googleOAuthCompletedViaLoopback = false
             googleOAuthOutcomeDelivered = false
             googleLoopbackReceiver?.stop()
             let receiver = OAuthLoopbackRedirectReceiver(port: oauthPort) { [weak self] callbackURL in
                 guard let self else { return }
                 self.googleLoopbackReceiver = nil
-                self.googleOAuthCompletedViaLoopback = true
-                self.googleAuthSession?.cancel()
+                self.endGoogleOAuthFlowTracking()
                 self.handleGoogleOAuthRedirectURL(
                     callbackURL,
                     clientId: clientId,
@@ -632,69 +616,27 @@ struct WebView: NSViewRepresentable {
                     )
                     return
                 }
-                self.presentGoogleOAuthSession(
-                    authURL: authURL,
-                    anchor: anchor,
-                    clientId: clientId,
-                    codeVerifier: verifier,
-                    redirectURI: redirectURI
-                )
+                self.openGoogleOAuthInDefaultBrowser(authURL: authURL, anchor: anchor)
             }
         }
 
-        private func presentGoogleOAuthSession(
-            authURL: URL,
-            anchor: NSWindow,
-            clientId: String,
-            codeVerifier: String,
-            redirectURI: String
-        ) {
-            oauthPresentationWindow = anchor
+        /// OAuth desktop Google: navegador do sistema + redirect para loopback local (evita ASWebAuthenticationSession / "helper application").
+        private func openGoogleOAuthInDefaultBrowser(authURL: URL, anchor: NSWindow) {
+            NSApp.activate(ignoringOtherApps: true)
+            anchor.makeKeyAndOrderFront(nil)
 
-            let session = ASWebAuthenticationSession(
-                url: authURL,
-                callbackURLScheme: "http"
-            ) { [weak self] callbackURL, error in
-                guard let self else { return }
-                self.endGoogleOAuthFlowTracking()
-                self.googleAuthSession = nil
-                self.oauthPresentationWindow = nil
-                self.googleLoopbackReceiver?.stop()
-                self.googleLoopbackReceiver = nil
-
-                if self.googleOAuthCompletedViaLoopback {
-                    return
-                }
-
-                if let error {
-                    self.publishGoogleSignInError(error.localizedDescription)
-                    return
-                }
-
-                guard let callbackURL else {
-                    self.publishGoogleSignInError("Resposta inesperada do Google.")
-                    return
-                }
-                self.handleGoogleOAuthRedirectURL(
-                    callbackURL,
-                    clientId: clientId,
-                    codeVerifier: codeVerifier,
-                    redirectURI: redirectURI
-                )
-            }
-
-            session.presentationContextProvider = self
-            session.prefersEphemeralWebBrowserSession = false
-            googleAuthSession = session
-
-            if !session.start() {
+            let opened = NSWorkspace.shared.open(authURL)
+            if !opened {
                 endGoogleOAuthFlowTracking()
-                googleAuthSession = nil
-                oauthPresentationWindow = nil
                 googleLoopbackReceiver?.stop()
                 googleLoopbackReceiver = nil
-                publishGoogleSignInError("Nao foi possivel abrir a janela de login do Google.")
+                publishGoogleSignInError("Nao foi possivel abrir o navegador para o login do Google.")
+                return
             }
+
+            #if DEBUG
+            NSLog("[Brain2 OAuth] Login aberto no navegador; aguardando redirect no loopback local.")
+            #endif
         }
 
         private func handleGoogleOAuthRedirectURL(
@@ -779,6 +721,11 @@ struct WebView: NSViewRepresentable {
         }
 
         private func publishGoogleSignInError(_ message: String) {
+            if isGoogleOAuthFlowActive {
+                googleLoopbackReceiver?.stop()
+                googleLoopbackReceiver = nil
+                endGoogleOAuthFlowTracking()
+            }
             let detail: [String: String] = ["message": message]
             guard JSONSerialization.isValidJSONObject(detail),
                   let data = try? JSONSerialization.data(withJSONObject: detail),
